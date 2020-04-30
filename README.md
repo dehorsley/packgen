@@ -8,10 +8,14 @@ routines to pack and unpack the structures.
 Assumptions made by the generator:
 
 - structs you want to unpack are `typedef`'d
-- contain no anonymous embedded structs (this assumption should be easily removed it needed)
+- contain no anonymous embedded structs (this assumption should be easily removed if needed)
 - C99 fixed width types are used (you really should use these everywhere that might be exposed)
 - no variable length data
 
-Note, if you are designing a communication protocol, don't use this.
+If you are designing a communication protocol, don't use this. Use something
+like protobuf, msgpack, or json
 
-This includes pycparser's fake libc headers for convenience.
+
+This includes pycparser's fake libc headers for convenience. Those are covered under their own license.
+
+The main program licensed under GPL 3. 

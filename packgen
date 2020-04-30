@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# This file covered by GPL 3 license
+# C. David Horsley 2020
 from pycparser import c_parser, c_ast, c_generator, parse_file
 
 
@@ -126,7 +128,7 @@ if __name__ == "__main__":
     from pathlib import Path
     parser = argparse.ArgumentParser(
         description='Generate unpacking routines for C struct')
-    parser.add_argument('filename', metavar='filename', 
+    parser.add_argument('filename', metavar='filename',
                         help='the header file containing the typedefs')
     parser.add_argument('--little', dest='endian', action='store_const', const='little', default='big',
                         help='generate little endian pack/unpack routines (default big endian)')
