@@ -64,7 +64,7 @@ class UnmarshalGenerator(c_ast.NodeVisitor):
 
         print("")
         print(
-            f"size_t unmarshal_{node.name}({node.name} *t, uint8_t *data, size_t n)")
+            f"ssize_t unmarshal_{node.name}({node.name} *t, uint8_t *data, size_t n)")
         print("{")
         print("ssize_t ret; uint8_t *p=data;")
         print(f"if (n < len_{node.name}) return -1;")
@@ -154,7 +154,7 @@ class JsonMarshalGenerator(c_ast.NodeVisitor):
         # handle strings as special case.
         if node.type.type.names[-1] == "char":
             print(
-                f"ret = json_stringn({node.type.declname}, {node.dim.value});")
+                f"ret = json_stringn(t->{node.type.declname}, {node.dim.value});")
             print("if (ret == NULL) return NULL;")
             print(f'json_object_set_new(root, "{node.type.declname}", ret);')
             return
