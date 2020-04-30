@@ -122,6 +122,76 @@ class UnmarshalGenerator(c_ast.NodeVisitor):
                 f"t->{name} = (data[3]<<0) | (data[2]<<8) | (data[1]<<16) | (data[0]<<24); data+=4; n-=4;")
 
 
+INT_TYPES = {'uint8_t', 'int8_t', 'char', 'uint16_t',
+             'int16_t', 'uint32_t', 'int32_t', 'uint64_t', 'int64_t'}
+
+BOOL_TYPES = {'bool'}
+
+
+class JsonMarshalGenerator(c_ast.NodeVisitor):
+    def __init__(self, filename):
+        super().__init__()
+        self.filename = filename
+        self.array = False
+
+    def visit_Typedef(self, node):
+        if node.coord.file != self.filename:
+            return
+
+        print("")
+        print(
+            f"json_t *marshal_json_{node.name}({node.name} *t)")
+        print("{")
+        print("json_t *root = json_object(); json_t *a; json_t *ret;")
+        print("if (root == NULL) return NULL;")
+
+        for c in node.type.type.decls:
+            self.visit(c)
+
+        print("return root;}")
+
+    def visit_ArrayDecl(self, node):
+        # handle strings as special case.
+        if node.type.type.names[-1] == "char":
+            print(
+                f"ret = json_stringn({node.type.declname}, {node.dim.value});")
+            print("if (ret == NULL) return NULL;")
+            print(f'json_object_set_new(root, "{node.type.declname}", ret);')
+            return
+
+        self.array = True
+        print("")
+        print("a = json_array();")
+        print("if (a == NULL) return NULL;")
+        print(f"for (int i=0; i < {node.dim.value}; i++)" "{")
+        for c in node:
+            self.visit(c)
+        self.array = False
+        print("}")
+        print(f'json_object_set_new(root, "{node.type.declname}", a);')
+        print("")
+
+    def visit_TypeDecl(self, node):
+        type = node.type.names[-1]
+        name = node.declname
+        if self.array:
+            name += "[i]"
+
+        if type in INT_TYPES:
+            print(f"ret = json_integer(t->{name});")
+        elif type in BOOL_TYPES:
+            print(f"ret = json_boolean(t->{name});")
+        else:
+            print(f"ret = marshal_json_{type}(&t->{name});")
+
+        print("if (ret == NULL) return NULL;")
+
+        if self.array:
+            print("json_array_append_new(a, ret);")
+        else:
+            print(f'json_object_set_new(root, "{name}", ret);')
+
+
 if __name__ == "__main__":
     import sys
     import argparse
@@ -140,6 +210,8 @@ if __name__ == "__main__":
     print("#include <stdint.h>")
     print("#include <sys/types.h>")
     print("")
+    print("#include <jansson.h>")
+    print("")
     print(f'#include "{args.filename}"')
     print("")
 
@@ -147,4 +219,7 @@ if __name__ == "__main__":
     l.visit(ast)
 
     v = UnmarshalGenerator(filename=args.filename, endian=args.endian)
+    v.visit(ast)
+
+    v = JsonMarshalGenerator(filename=args.filename)
     v.visit(ast)
