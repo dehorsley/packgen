@@ -1,56 +1,91 @@
 #!/usr/bin/env python3
 # This file covered by GPL 3 license
 # C. David Horsley 2020
+import sys
+import os.path
 from pycparser import c_parser, c_ast, c_generator, parse_file
 
-
 class LengthGenerator(c_ast.NodeVisitor):
-    def __init__(self, filename):
+    def __init__(self, filename, output=None):
         super().__init__()
         self.filename = filename
+        if output is None:
+            self.output = sys.stdout
+        else:
+            self.output = output
+
+        self.constants = {}
+        self.stack = []
+
+    def push(self, value):
+        self.stack.append(value)
+    def pop(self):
+        val =  self.stack.pop()
+        return val
+
+    def print(self, *args, **kwargs):
+        print(*args, file=self.output, **kwargs)
+
+    def add(self):
+        v1 = self.pop()
+        v2 = self.pop()
+        self.push(v1 + v2)
+
+    def mul(self):
+        v1 = self.pop()
+        v2 = self.pop()
+        self.push(v1 * v2)
 
     def visit_Typedef(self, node):
         if node.coord.file != self.filename:
             return
 
-        print("")
-        print(f"const size_t len_{node.name} = 0", end="")
+        self.print(f"const size_t len_{node.name} = ", end="")
 
+        self.push(0)
         for c in node.type.type.decls:
             self.visit(c)
 
-        print(";")
+        value = self.pop()
+
+        self.print(f"{value};")
+        self.constants[f"len_{node.name}"] = value
+
 
     def visit_ArrayDecl(self, node):
-        print("+", node.dim.value, "*(0")
+        self.push(int(node.dim.value))
+        self.push(0)
         for c in node:
             self.visit(c)
-        print(")")
+        self.mul()
+        self.add()
 
     def visit_TypeDecl(self, node):
         type = node.type.names[-1]
         name = node.declname
 
         if type in {'uint8_t', 'int8_t', 'char'}:
-            print("+1")
+            self.push(1)
 
         elif type == 'uint16_t':
-            print("+2")
+            self.push(2)
 
         elif type == 'uint32_t':
-            print("+4")
+            self.push(4)
 
         elif type == 'uint64_t':
-            print("+8")
+            self.push(8)
 
         else:
-            print(f"+len_{type}")
+            self.push(self.constants[f"len_{type}"])
+
+        self.add()
 
 
 class UnmarshalGenerator(c_ast.NodeVisitor):
     endian = "little"
 
-    def __init__(self, filename, endian=None):
+    def __init__(self, filename, endian=None, output=None, header=None):
         super().__init__()
         self.filename = filename
         self.array = False
@@ -58,29 +93,56 @@ class UnmarshalGenerator(c_ast.NodeVisitor):
         if endian:
             self.endian = endian
 
+        if output is None:
+            self.output = sys.stdout
+        else:
+            self.output = output
+
+        if header is None:
+            self.header = sys.stdout
+        else:
+            self.header = header
+
+        self.print("#include <stdint.h>")
+        self.print("#include <sys/types.h>")
+        self.print("")
+        self.print(f'#include "{filename}"')
+
+        l = LengthGenerator(filename=args.filename, output=self.output)
+        l.visit(ast)
+
+    def printheader(self, *args, **kwargs):
+        print(*args, file=self.header, **kwargs)
+
+    def print(self, *args, **kwargs):
+        print(*args, file=self.output, **kwargs)
+
+
     def visit_Typedef(self, node):
         if node.coord.file != self.filename:
             return
 
-        print("")
-        print(
+        self.print("")
+        self.printheader(
+            f"ssize_t unmarshal_{node.name}({node.name} *t, uint8_t *data, size_t n);")
+        self.print(
             f"ssize_t unmarshal_{node.name}({node.name} *t, uint8_t *data, size_t n)")
-        print("{")
-        print("ssize_t ret; uint8_t *p=data;")
-        print(f"if (n < len_{node.name}) return -1;")
+        self.print("{")
+        self.print("ssize_t ret; uint8_t *p=data;")
+        self.print(f"if (n < len_{node.name}) return -1;")
 
         for c in node.type.type.decls:
             self.visit(c)
 
-        print("return (p-data);}")
+        self.print("return (p-data);}")
 
     def visit_ArrayDecl(self, node):
         self.array = True
-        print(f"for (int i=0; i < {node.dim.value}; i++)" "{")
+        self.print(f"for (int i=0; i < {node.dim.value}; i++)" "{")
         for c in node:
             self.visit(c)
         self.array = False
-        print("}")
+        self.print("}")
 
     def visit_TypeDecl(self, node):
         type = node.type.names[-1]
@@ -101,24 +163,24 @@ class UnmarshalGenerator(c_ast.NodeVisitor):
             self.gen_unmarshal_uint32(name)
 
         else:
-            print(f"ret = unmarshal_{type}(&t->{name}, p, n);")
-            print("p += ret; n -= ret;")
+            self.print(f"ret = unmarshal_{type}(&t->{name}, p, n);")
+            self.print("p += ret; n -= ret;")
 
     def gen_unmarshal_uint8(self, name):
-        print(f"t->{name} = *p++; n--;")
+        self.print(f"t->{name} = *p++; n--;")
 
     def gen_unmarshal_uint16(self, name):
         if self.endian == "little":
-            print(f"t->{name} = (p[0]<<0) | (p[1]<<8); p+=2; n-=2;")
+            self.print(f"t->{name} = (p[0]<<0) | (p[1]<<8); p+=2; n-=2;")
         else:
-            print(f"t->{name} = (p[1]<<0) | (p[0]<<8); p+=2; n-=2;")
+            self.print(f"t->{name} = (p[1]<<0) | (p[0]<<8); p+=2; n-=2;")
 
     def gen_unmarshal_uint32(self, name):
         if self.endian == "little":
-            print(
+            self.print(
                 f"t->{name} = (p[0]<<0) | (p[1]<<8) | (p[2]<<16) | (p[3]<<24); p+=4; n-=4;")
         else:
-            print(
+            self.print(
                 f"t->{name} = (p[3]<<0) | (p[2]<<8) | (p[1]<<16) | (p[0]<<24); p+=4; n-=4;")
 
 
@@ -129,47 +191,70 @@ BOOL_TYPES = {'bool'}
 
 
 class JsonMarshalGenerator(c_ast.NodeVisitor):
-    def __init__(self, filename):
+    def __init__(self, filename, output=None, header=None):
         super().__init__()
         self.filename = filename
         self.array = False
+
+        if output is None:
+            self.output = sys.stdout
+        else:
+            self.output = output
+
+        if header is None:
+            self.header = sys.stdout
+        else:
+            self.header = header
+
+        self.print("#include <jansson.h>")
+        self.print("")
+        self.print(f'#include "{filename}"')
+
+    def printheader(self, *args, **kwargs):
+        print(*args, file=self.header, **kwargs)
+
+    def print(self, *args, **kwargs):
+        print(*args, file=self.output, **kwargs)
 
     def visit_Typedef(self, node):
         if node.coord.file != self.filename:
             return
 
-        print("")
-        print(
+        self.print("")
+        self.printheader(
+            f"json_t *marshal_json_{node.name}({node.name} *t);")
+        self.print(
             f"json_t *marshal_json_{node.name}({node.name} *t)")
-        print("{")
-        print("json_t *root = json_object(); json_t *a; json_t *ret;")
-        print("if (root == NULL) return NULL;")
+        self.print("{")
+        self.print("json_t *root = json_object(); json_t *a; json_t *ret;")
+        self.print("if (root == NULL) return NULL;")
 
         for c in node.type.type.decls:
             self.visit(c)
 
-        print("return root;}")
+        self.print("return root;}")
 
     def visit_ArrayDecl(self, node):
         # handle strings as special case.
         if node.type.type.names[-1] == "char":
-            print(
+            self.print(
                 f"ret = json_stringn(t->{node.type.declname}, {node.dim.value});")
-            print("if (ret == NULL) return NULL;")
-            print(f'json_object_set_new(root, "{node.type.declname}", ret);')
+            self.print("if (ret == NULL) return NULL;")
+            self.print(
+                f'json_object_set_new(root, "{node.type.declname}", ret);')
             return
 
         self.array = True
-        print("")
-        print("a = json_array();")
-        print("if (a == NULL) return NULL;")
-        print(f"for (int i=0; i < {node.dim.value}; i++)" "{")
+        self.print("")
+        self.print("a = json_array();")
+        self.print("if (a == NULL) return NULL;")
+        self.print(f"for (int i=0; i < {node.dim.value}; i++)" "{")
         for c in node:
             self.visit(c)
         self.array = False
-        print("}")
-        print(f'json_object_set_new(root, "{node.type.declname}", a);')
-        print("")
+        self.print("}")
+        self.print(f'json_object_set_new(root, "{node.type.declname}", a);')
+        self.print("")
 
     def visit_TypeDecl(self, node):
         type = node.type.names[-1]
@@ -178,18 +263,18 @@ class JsonMarshalGenerator(c_ast.NodeVisitor):
             name += "[i]"
 
         if type in INT_TYPES:
-            print(f"ret = json_integer(t->{name});")
+            self.print(f"ret = json_integer(t->{name});")
         elif type in BOOL_TYPES:
-            print(f"ret = json_boolean(t->{name});")
+            self.print(f"ret = json_boolean(t->{name});")
         else:
-            print(f"ret = marshal_json_{type}(&t->{name});")
+            self.print(f"ret = marshal_json_{type}(&t->{name});")
 
-        print("if (ret == NULL) return NULL;")
+        self.print("if (ret == NULL) return NULL;")
 
         if self.array:
-            print("json_array_append_new(a, ret);")
+            self.print("json_array_append_new(a, ret);")
         else:
-            print(f'json_object_set_new(root, "{name}", ret);')
+            self.print(f'json_object_set_new(root, "{name}", ret);')
 
 
 if __name__ == "__main__":
@@ -207,19 +292,18 @@ if __name__ == "__main__":
     ast = parse_file(args.filename, use_cpp=True, cpp_path="gcc",
                      cpp_args=['-E', "-I%s" % (Path(__file__).resolve().parent / 'fake_libc_include')])
 
-    print("#include <stdint.h>")
-    print("#include <sys/types.h>")
-    print("")
-    print("#include <jansson.h>")
-    print("")
-    print(f'#include "{args.filename}"')
-    print("")
+    base = os.path.splitext(args.filename)[0]
 
-    l = LengthGenerator(filename=args.filename)
-    l.visit(ast)
+    with open(base+"_unpack.h", "w+") as unpack_h, open(base+"_unpack.c", "w+") as unpack_c, open(base+"_json.h", "w+") as json_h, open(base+"_json.c", "w+") as json_c:
 
-    v = UnmarshalGenerator(filename=args.filename, endian=args.endian)
-    v.visit(ast)
+        v = UnmarshalGenerator(filename=args.filename,
+                               endian=args.endian,
+                               output=unpack_c,
+                               header=unpack_h,
+                               )
+        v.visit(ast)
 
-    v = JsonMarshalGenerator(filename=args.filename)
-    v.visit(ast)
+        v = JsonMarshalGenerator(filename=args.filename,
+                                 output=json_c,
+                                 header=json_h)
+        v.visit(ast)
