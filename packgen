@@ -151,10 +151,9 @@ class UnmarshalGenerator(c_ast.NodeVisitor):
     def visit_ArrayDecl(self, node):
         if not self.inside_typedef:
             return
-        self.array = True
         self.print(f"for (int i=0; i < {node.dim.value}; i++)" "{")
-        for c in node:
-            self.visit(c)
+        self.array = True
+        self.generic_visit(node)
         self.array = False
         self.print("}")
 
@@ -225,6 +224,7 @@ class JsonMarshalGenerator(c_ast.NodeVisitor):
         self.filename = filename
         self.array = False
         self.inside_typedef = False
+        self.pointerlevel = 0
 
         if output is None:
             self.output = sys.stdout
@@ -245,6 +245,11 @@ class JsonMarshalGenerator(c_ast.NodeVisitor):
 
     def print(self, *args, **kwargs):
         print(*args, file=self.output, **kwargs)
+
+    def visit_PtrDecl(self, node):
+        self.pointerlevel += 1
+        self.generic_visit(node)
+        self.pointerlevel -= 1
 
     def visit_Typedef(self, node):
         if node.coord.file != self.filename:
@@ -293,10 +298,15 @@ class JsonMarshalGenerator(c_ast.NodeVisitor):
             return
         type_ = node.type.names[-1]
         name = node.declname
+
         if self.array:
             name += "[i]"
 
-        if type_ in INT_TYPES:
+        if type_ == "char" and self.pointerlevel == 1:
+            self.print(f"ret = json_string(t->{name});")
+        elif type_ == "char" and self.pointerlevel > 1:
+            raise TypeError("can't handle string arrays")
+        elif type_ in INT_TYPES:
             self.print(f"ret = json_integer(t->{name});")
         elif type_ in BOOL_TYPES:
             self.print(f"ret = json_boolean(t->{name});")
