@@ -216,6 +216,8 @@ INT_TYPES = {
 
 BOOL_TYPES = {"bool"}
 
+REAL_TYPES = {"float", "double"}
+
 
 class JsonMarshalGenerator(c_ast.NodeVisitor):
     def __init__(self, filename, output=None, header=None):
@@ -298,6 +300,8 @@ class JsonMarshalGenerator(c_ast.NodeVisitor):
             self.print(f"ret = json_integer(t->{name});")
         elif type_ in BOOL_TYPES:
             self.print(f"ret = json_boolean(t->{name});")
+        elif type_ in REAL_TYPES:
+            self.print(f"ret = json_real(t->{name});")
         else:
             self.print(f"ret = marshal_json_{type_}(&t->{name});")
 
