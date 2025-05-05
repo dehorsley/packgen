@@ -19,9 +19,13 @@
 # along with this program. If not, see <http://www.gnu.org/licenses/>.
 #
 set -e
-#Allow running from any directory if the installation directory is
-#placed in PATH. Alternately, you can copy this script to some place
-#already in PATH and hard-code DIR in that copy.
-DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd )"
-source $DIR/venv/bin/activate
-python3 $DIR/packgen.py "$@"
+if ! python3 -m venv venv; then
+    echo python3 venv install failed
+    exit 1
+fi
+. venv/bin/activate
+if ! pip3 install -r requirements.txt; then
+    echo pip3 requirements install failed
+    exit 1
+fi
+deactivate
