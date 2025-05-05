@@ -15,6 +15,11 @@ Assumptions made by the generator:
 If you are designing a communication protocol, don't use this. Use something
 like protobuf, msgpack, or json
 
+To install, use the _install_ script. Thereafter run it with the
+_packgen_ script. You can run it from any directory if you add the
+directory where it was installed to your `PATH`. Alternately, you can
+copy the _packgen_ script to some place already in `PATH` and hard-code
+`DIR`, in that copy, to be the installation directory.
 
 This includes pycparser's fake libc headers for convenience. Those are covered under their own license.
 
