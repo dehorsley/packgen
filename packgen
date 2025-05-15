@@ -220,25 +220,20 @@ class JsonMarshalGenerator(c_ast.NodeVisitor):
     def print(self, *args, **kwargs):
         print(*args, file=self.output, **kwargs)
 
-    def visit_TypeDecl(self, node: c_ast.TypeDecl):
-        if node.coord.file != self.filename:
-            return
-
-        if self.inside_generate_function:
-            self.generate_statement(node)
-            return
-
-        self.generate_function(node)
-
     def visit_ArrayDecl(self, node):
-        # handle strings as special case.
-        if node.type.type.names[-1] == "char":
-            self.print(
-                f"ret = json_stringn(t->{node.type.declname}, {node.dim.value});")
-            self.print("if (ret == NULL) return NULL;")
-            self.print(
-                f'json_object_set_new(root, "{node.type.declname}", ret);')
+        if not self.inside_generate_function:
             return
+        # handle strings as special case.
+        try:
+            if node.type.type.names[-1] == "char":
+                self.print(
+                    f"ret = json_stringn(t->{node.type.declname}, {node.dim.value});")
+                self.print("if (ret == NULL) return NULL;")
+                self.print(
+                    f'json_object_set_new(root, "{node.type.declname}", ret);')
+                return
+        except:
+            pass
 
         self.array = True
         self.print("")
@@ -249,7 +244,12 @@ class JsonMarshalGenerator(c_ast.NodeVisitor):
             self.visit(c)
         self.array = False
         self.print("}")
-        self.print(f'json_object_set_new(root, "{node.type.declname}", a);')
+        try:
+            self.print(f'json_object_set_new(root, "{node.type.declname}", a);')
+        except:
+            print(node)
+            print(node.coord)
+            raise AttributeError
         self.print("")
 
     def visit_Typedef(self, node):
@@ -257,6 +257,23 @@ class JsonMarshalGenerator(c_ast.NodeVisitor):
         for c in node:
             self.visit(c)
         self.inside_typedef = False
+        
+    def visit_Decl(self, node: c_ast.TypeDecl):
+        if self.inside_generate_function:
+            for c in node:
+                self.visit(c)
+            return
+        self.generate_function(node)
+
+    def visit_TypeDecl(self, node: c_ast.TypeDecl):
+        # if node.coord.file != self.filename:
+        #     return
+
+        if self.inside_generate_function:
+            self.generate_statement(node)
+            return
+
+        self.generate_function(node)
 
     def generate_function(self, node: c_ast.TypeDecl, name=None, flat_name=None):
         if self.inside_typedef:
@@ -266,6 +283,7 @@ class JsonMarshalGenerator(c_ast.NodeVisitor):
             name = "struct " + node.type.name
             flat_name = '_'.join(name.split())
         else:
+            print(node.coord)
             raise TypeError
 
         if flat_name in self.handled:
@@ -305,6 +323,7 @@ class JsonMarshalGenerator(c_ast.NodeVisitor):
             
         name = node.declname
         if name is None:
+            print(node.coord)
             raise ValueError
 
         if self.array:
