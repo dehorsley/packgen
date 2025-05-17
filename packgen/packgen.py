@@ -2,11 +2,12 @@
 # This file covered by GPL 3 license
 # C. David Horsley 2020
 import sys
-import os.path
 from pycparser import c_parser, c_ast, c_generator, parse_file
 
 
 class LengthGenerator(c_ast.NodeVisitor):
+    """Calculate the sizes of the packed structures."""
+
     def __init__(self, filename, output=None):
         super().__init__()
         self.filename = filename
@@ -70,18 +71,17 @@ class LengthGenerator(c_ast.NodeVisitor):
         if not self.inside_typedef:
             return
         type = node.type.names[-1]
-        name = node.declname
 
         if type in {"uint8_t", "int8_t", "char", "bool"}:
             self.push(1)
 
-        elif type == "uint16_t":
+        elif type == {"uint16_t", "int16_t"}:
             self.push(2)
 
-        elif type in {"uint32_t", "float"}:
+        elif type in {"uint32_t", "int32_t", "float"}:
             self.push(4)
 
-        elif type in {"uint64_t", "double"}:
+        elif type == {"uint64_t", "int64_t", "double"}:
             self.push(8)
 
         else:
@@ -117,8 +117,10 @@ class UnmarshalGenerator(c_ast.NodeVisitor):
         self.print("")
         self.print(f'#include "{filename}"')
 
-        l = LengthGenerator(filename=args.filename, output=self.output)
-        l.visit(ast)
+    def visit(self, node):
+        length_gen = LengthGenerator(filename=self.filename, output=self.output)
+        length_gen.visit(node)
+        return super().visit(node)
 
     def printheader(self, *args, **kwargs):
         print(*args, file=self.header, **kwargs)
@@ -321,54 +323,3 @@ class JsonMarshalGenerator(c_ast.NodeVisitor):
             self.print("json_array_append_new(a, ret);")
         else:
             self.print(f'json_object_set_new(root, "{name}", ret);')
-
-
-if __name__ == "__main__":
-    import sys
-    import argparse
-    from pathlib import Path
-
-    parser = argparse.ArgumentParser(
-        description="Generate unpacking routines for C struct"
-    )
-    parser.add_argument(
-        "filename", metavar="filename", help="the header file containing the typedefs"
-    )
-    parser.add_argument(
-        "--little",
-        dest="endian",
-        action="store_const",
-        const="little",
-        default="big",
-        help="generate little endian pack/unpack routines (default big endian)",
-    )
-    args = parser.parse_args()
-
-    ast = parse_file(
-        args.filename,
-        use_cpp=True,
-        cpp_path="gcc",
-        cpp_args=[
-            "-E",
-            "-I%s" % (Path(__file__).resolve().parent / "fake_libc_include"),
-        ],
-    )
-
-    base = os.path.splitext(args.filename)[0]
-
-    with open(base + "_unpack.h", "w+") as unpack_h, open(
-        base + "_unpack.c", "w+"
-    ) as unpack_c, open(base + "_json.h", "w+") as json_h, open(
-        base + "_json.c", "w+"
-    ) as json_c:
-
-        v = UnmarshalGenerator(
-            filename=args.filename,
-            endian=args.endian,
-            output=unpack_c,
-            header=unpack_h,
-        )
-        v.visit(ast)
-
-        v = JsonMarshalGenerator(filename=args.filename, output=json_c, header=json_h)
-        v.visit(ast)
