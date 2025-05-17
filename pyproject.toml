@@ -1,18 +1,18 @@
 [build-system]
-requires = ["setuptools>=60", "setuptools-scm>=8.0"]
+requires = ["setuptools>=64", "setuptools-scm>=8.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "packgen"
 dynamic = ['version']
-description = "a tool to generate C struct packing and unpacking routines"
+description = "A tool to generate C struct packing and unpacking routines"
 authors = [{ name = "David Horsley", email = "david.e.horsley@gmail.com" }]
 license = { file = "LICENSE" }
 readme = "README.md"
 requires-python = ">=3.6"
-dependencies = [
-    "pycparser"
-]
+dependencies = ["pycparser"]
 
 [project.scripts]
 packgen = "packgen.__main__:main"
+
+[tool.setuptools_scm]
