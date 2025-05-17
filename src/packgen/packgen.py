@@ -41,7 +41,7 @@ class LengthGenerator(c_ast.NodeVisitor):
         self.push(v1 * v2)
 
     def visit_Typedef(self, node):
-        if node.coord.file != self.filename:
+        if node.coord.file and node.coord.file != self.filename:
             return
 
         self.print(f"const size_t len_{node.name} = ", end="")
@@ -75,13 +75,13 @@ class LengthGenerator(c_ast.NodeVisitor):
         if type in {"uint8_t", "int8_t", "char", "bool"}:
             self.push(1)
 
-        elif type == {"uint16_t", "int16_t"}:
+        elif type in {"uint16_t", "int16_t"}:
             self.push(2)
 
         elif type in {"uint32_t", "int32_t", "float"}:
             self.push(4)
 
-        elif type == {"uint64_t", "int64_t", "double"}:
+        elif type in {"uint64_t", "int64_t", "double"}:
             self.push(8)
 
         else:
