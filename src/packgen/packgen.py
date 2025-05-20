@@ -2,7 +2,7 @@
 # This file covered by GPL 3 license
 # C. David Horsley 2020
 import sys
-from pycparser import c_parser, c_ast, c_generator, parse_file
+from pycparser import c_ast
 
 
 class LengthGenerator(c_ast.NodeVisitor):
