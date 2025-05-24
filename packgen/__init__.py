@@ -11,9 +11,9 @@ from packgen.packgen import (
 )
 
 
-def parse_file_with_fake_libc(filename: str) -> c_ast.FileAST:
+def parse_file_with_fake_libc(filename: str | Path) -> c_ast.FileAST:
     ast = parse_file(
-        filename,
+        str(filename),
         use_cpp=True,
         cpp_path="gcc",
         cpp_args=[
