@@ -30,7 +30,7 @@ def _length_generator(c_code: str, tmp_path: Path) -> str:
     c_file.write_text(c_code, encoding="utf-8")
 
     # Parse the C code
-    ast = parse_file_with_fake_libc(str(c_file))
+    ast = parse_file_with_fake_libc(c_file)
 
     # Create a LengthGenerator instance
     buf = StringIO()
