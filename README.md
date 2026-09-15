@@ -2,20 +2,256 @@
 
 One small step above casting a buffer to a struct.
 
-This is a tool takes a file containing struct type definitions and generates
-routines to pack and unpack the structures.
+This is a tool that takes a file containing struct type definitions and
+generates routines to pack and unpack the structures.
+
+If you are designing a communication protocol, don't use this. Use something
+like protobuf, msgpack, or json.
+
+## Installation
+
+```
+pip install packgen
+```
+
+## Usage
+
+```
+packgen packet.h            # big endian (the default)
+packgen --little packet.h   # little endian
+packgen -o build packet.h   # write somewhere other than next to the header
+packgen --no-json packet.h  # skip the jansson marshallers
+```
+
+For `packet.h` this writes four files:
+
+| file             | contents                                          |
+| ---------------- | ------------------------------------------------- |
+| `packet_unpack.h`| length macros and prototypes                       |
+| `packet_unpack.c`| `marshal_*` / `unmarshal_*`                        |
+| `packet_json.h`  | JSON prototypes                                    |
+| `packet_json.c`  | `marshal_json_*`, built on [jansson][]             |
+
+[jansson]: https://github.com/akheron/jansson
+
+For each `typedef`'d struct `X` you get:
+
+```c
+#define len_X ((size_t)42)   /* packed size, usable as an array bound */
+
+ptrdiff_t unmarshal_X(X *t, const uint8_t *data, size_t n);
+ptrdiff_t marshal_X(const X *t, uint8_t *data, size_t n);
+
+json_t *marshal_json_X(const X *t);
+```
+
+`marshal_X` and `unmarshal_X` return the number of bytes used, or `-1` if the
+buffer is shorter than `len_X` or either pointer is `NULL`. `marshal_json_X`
+returns a new reference, or `NULL` if an allocation failed.
+
+`marshal_X` and `unmarshal_X` are inverses, with one exception: a `bool` is
+normalised on the way in, so a wire byte of `0x05` decodes to `true` and
+re-encodes as `0x01`. Everything else round trips byte for byte, including
+NaN payloads and infinities, which are copied bit for bit and never inspected.
+
+## What the generator accepts
 
 Assumptions made by the generator:
 
-- structs you want to unpack are `typedef`'d
-- contain no anonymous embedded structs (this assumption should be easily removed if needed)
-- C99 fixed width types are used (you really should use these everywhere that might be exposed)
+- structs you want to pack are `typedef`'d
+- C99 fixed width types are used (you really should use these everywhere that
+  might be exposed)
 - no variable length data
 
-If you are designing a communication protocol, don't use this. Use something
-like protobuf, msgpack, or json
+Supported field types are `uint8_t`/`int8_t` … `uint64_t`/`int64_t`, `char`,
+`bool`, `float`, `double`, other `typedef`'d structs, `typedef` aliases of the
+above, and arrays of any of those.
+
+Arrays may have **any number of dimensions**, including arrays of structs that
+themselves contain arrays — `inner_t grid[2][3][4]` packs in C's row-major
+order, last index varying fastest, exactly as the in-memory layout does. In
+JSON an *N*-dimensional array becomes *N* levels of nesting, except for `char`,
+where the innermost dimension is the string: `char names[2][3][5]` is two
+arrays of three strings.
+
+`packgen` parses the header with [tree-sitter][] and does **not** run the C
+preprocessor, so it only sees declarations written in the file you hand it —
+anything arriving via `#include` is invisible. Enough of the preprocessor is
+understood for real headers to work:
+
+- include guards and `#pragma once`
+- the `#ifdef __cplusplus` / `extern "C"` wrapper
+- object-like `#define`s and enumerators, folded so they can be used as array
+  bounds:
+
+  ```c
+  #define NCHAN 8
+  typedef struct { sample_t chan[NCHAN]; } frame_t;   /* works */
+  ```
+
+`#if` conditions are folded where packgen can work them out, so dead branches
+are skipped rather than emitted. `#if 0`, `#ifdef` of a macro the file never
+defines, `defined(…)`, and comparisons against macros it *does* define all
+resolve:
+
+```c
+#if 0
+typedef struct { ... } dead_t;   /* skipped, not generated */
+#endif
+
+#define VER 3
+#if VER >= 2
+typedef struct { ... } live_t;   /* generated */
+#endif
+```
+
+Because packgen does not follow `#include`, a macro it has never seen counts
+as undefined — the same assumption a default build makes. If you rely on
+`-DSOMETHING` to select a struct, packgen will not see it.
+
+A condition it *cannot* fold (a function-like macro, say) falls back to reading
+every branch, since dropping the struct would be a guess in the other
+direction. A name that then ends up meaning two different things is refused
+rather than resolved arbitrarily:
+
+```c
+#if CONFIG_MACRO(1)
+#define N 8
+#else
+#define N 4      /* error: N is defined more than once with different values */
+#endif
+```
+
+The same goes for enumerators: once one of them has a value packgen cannot
+work out (`B = sizeof(int)`, say), every enumerator after it is numbered
+relative to that unknown, so using one as an array bound is an error rather
+than a guess.
+
+[tree-sitter]: https://tree-sitter.github.io/
+
+Anything without a portable packed layout is rejected with an error naming the
+file and line, rather than being silently mis-packed: bit fields, plain `int`
+and friends, unions, enums, pointers, `const` members, flexible array members,
+anonymous embedded structs, and `#if` blocks inside a struct body.
+
+## Portability
+
+The output is ISO C99 and builds clean under `-std=c99 -pedantic -Wall -Wextra
+-Wconversion -Wsign-conversion -Werror`, which the test suite enforces for c99,
+c11 and c17. Specifically:
+
+- **No POSIX.** The return type is `ptrdiff_t` from `<stddef.h>`, not the more
+  idiomatic `ssize_t` — that one is POSIX and does not exist on MSVC. Nothing
+  includes `<sys/types.h>`.
+- `_Static_assert` is used where the compiler has it, with a C89-compatible
+  `typedef char x[cond ? 1 : -1]` fallback, so the assertions survive on older
+  toolchains instead of failing to compile.
+- `float` and `double` move through `memcpy` rather than a union or a cast, and
+  the generated code asserts they are 4 and 8 bytes.
+- Signed integers are decoded through their unsigned counterpart, so only the
+  final narrowing conversion is implementation defined.
+- The headers are wrapped in `extern "C"` and compile as C++.
+- The JSON NUL scan is spelled out rather than calling `strnlen`, which glibc
+  hides under `-std=c11`.
+
+## Notes on the generated code
+
+- Fixed-size fields are packed with no padding, so the packed size is normally
+  smaller than `sizeof` the struct. A static assertion in the generated `.c`
+  catches a header that has drifted away from its generated code.
+- Each `unmarshal_X`/`marshal_X` is a thin checked wrapper around a `static`
+  core that threads a pointer and takes no length. The wrapper has already
+  proved the buffer holds `len_X` bytes, and `len_X` counts every nested field,
+  so the core cannot run off the end and a nested struct needs no second bounds
+  check. Bounds and `NULL` checks happen once, at every public entry point.
+- The byte-at-a-time shift/or decode is deliberate: it is endian-agnostic
+  standard C, and both GCC and Clang recognise the pattern and emit a single
+  wide load plus a byte swap.
+- `uint64_t` is rendered in JSON as a decimal *string*. `json_int_t` is signed,
+  so values above `INT64_MAX` cannot round trip as JSON numbers; this is the
+  same compromise proto3's JSON mapping makes.
+- A fixed-size `char` field is rendered in JSON as a string truncated at its
+  first NUL, so the usual NUL padding does not leak into the output. The
+  innermost dimension of a char array is the string, so `char names[4][8]`
+  becomes an array of four strings rather than an array of arrays of numbers.
+
+## A note on inlining
+
+A nested struct is decoded by calling the shared `static` routine for its
+type, and whether that call survives is left to the compiler. That is a
+deliberate choice, and it was measured rather than assumed. Three variants of
+the DBBC packet code, clang 21 at `-O2` on arm64, best of seven runs:
+
+| variant | calls left | `__TEXT` | 6208 B packet | 92 B nested struct |
+| --- | --- | --- | --- | --- |
+| shared routines (what packgen emits) | 22 | 5408 | 482 ns | 5.0–6.3 ns |
+| `static inline` on the cores | 18 | 5932 | **518 ns** | 5.1–5.5 ns |
+| `always_inline` on the cores | 0 | 6228 | 482 ns | 4.5–4.6 ns |
+| nesting emitted inline in the source | 0 | 6256 | 481 ns | 4.5–4.9 ns |
+
+Three things come out of that:
+
+- **The compiler already inlines what matters.** For a small nested struct it
+  needs no encouragement: a header of 1000 one-byte nested structs compiled to
+  byte-identical code in all three variants.
+- **Annotating `inline` makes things worse.** It bought partial inlining —
+  bigger *and* 7.6% slower on the real packet, reproducible on every run. So
+  packgen does not emit it.
+- **Forcing the calls open is not worth it.** On a 6 KB packet it changes
+  nothing for 15% more text. The only gain is ~0.5 ns per message on a
+  mid-size struct with several nested structs, in a tight cache-resident loop
+  — invisible next to the socket read that delivers a real packet.
+
+packgen used to have a `--flatten` flag that emitted the nesting inline. It was
+removed: it made no difference on the header this tool exists for, and on a
+deeply branching type graph it multiplied the generated code 16×.
 
 
-This includes pycparser's fake libc headers for convenience. Those are covered under their own license.
+## Tests
 
-The main program licensed under GPL 3. 
+```
+uv run pytest
+```
+
+The end-to-end tests compile the generated code with `-std=c99 -pedantic -Wall
+-Wextra -Wconversion -Wsign-conversion -Wshadow -Werror`, then check its wire
+format against an independent implementation in Python (`tests/reference.py`)
+— so a field emitted in the wrong order or byte order shows up as a mismatch
+rather than cancelling itself out in a round trip.
+
+Everything runs under ASan plus UBSan with the checks the default `undefined`
+group leaves out — `integer`, `implicit-conversion`, `local-bounds`,
+`nullability` — and `-fno-sanitize-recover=all`, so the first violation is
+fatal rather than a logged warning. Because a sanitiser only checks what
+actually executes, one test drives *every* struct's `unmarshal` and `marshal`
+through success, both `NULL` branches and the short-buffer branch, at byte
+patterns sitting on the representation boundaries. That reaches 100% region,
+function, line and branch coverage of the generated `.c` for both byte orders. A further test compiles deliberate undefined behaviour
+and asserts it *is* caught, so the suite cannot go quietly inert if the
+sanitiser flags ever stop reaching the compiler.
+
+`tests/test_fuzz.py` does the same on randomly generated headers, across both
+byte orders. A failure prints the seed, which reproduces the header exactly. The committed suite runs a small number of seeds to stay
+quick; the generator in `tests/random_headers.py` takes any seed, and a
+600-case sweep currently passes clean.
+
+Tests are skipped if there is no C compiler; the JSON tests are skipped if
+jansson is not installed.
+
+### What is not covered
+
+- **Big-endian and mixed-endian hosts.** The decode is byte-wise and so should
+  be host-agnostic, and `float`/`double` move through `memcpy` of an integer
+  of the same width — correct on any host that stores integers and reals with
+  the same byte order. That is every mainstream platform, but it is reasoning,
+  not a test result: all testing so far is little-endian AArch64.
+- **Compilers other than Clang.** The standards matrix is real but has only
+  been run against Apple Clang. GCC and MSVC are untested.
+- `char` is packed as a raw byte, so its value round trips whatever the
+  platform's `char` signedness — but a `char` field holding a value above 127
+  is negative when read back on a signed-`char` platform, as it would be
+  anywhere else in C.
+
+## Licence
+
+The main program is licensed under GPL 3.
