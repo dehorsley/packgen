@@ -720,3 +720,40 @@ class TestDeferredRejections:
         assert schema.size_of("good_t") == 4
         with pytest.raises(UnsupportedTypeError, match="pointer"):
             schema.size_of("bad_t")
+
+
+class TestTreeSitterCoupling:
+    """packgen is pinned to a tree-sitter API that has broken before.
+
+    Language(path, "c") plus set_language() became
+    Language(tree_sitter_c.language()) plus Parser(lang) at 0.22.  The
+    dependency is capped in pyproject.toml because of it; these assert
+    the specific calls packgen makes, so a future break fails here with
+    a clear reason rather than as a hundred confusing parse errors.
+    """
+
+    def test_the_language_and_parser_constructors_take_what_we_pass(self):
+        import tree_sitter_c
+        from tree_sitter import Language, Parser
+
+        parser = Parser(Language(tree_sitter_c.language()))
+        tree = parser.parse(b"typedef struct { int a; } s_t;\n")
+        assert tree.root_node.type == "translation_unit"
+        assert not tree.root_node.has_error
+
+    def test_installed_tree_sitter_is_within_the_declared_cap(self):
+        """Catches a lockfile or CI that resolved outside the pin."""
+        from importlib.metadata import version
+
+        import tomllib
+        from packaging.requirements import Requirement
+        from packaging.version import Version
+
+        pyproject = Path(__file__).resolve().parent.parent / "pyproject.toml"
+        declared = tomllib.loads(pyproject.read_text())["project"]["dependencies"]
+        for raw in declared:
+            requirement = Requirement(raw)
+            installed = Version(version(requirement.name))
+            assert requirement.specifier.contains(installed), (
+                f"{requirement.name} {installed} is outside {requirement.specifier}"
+            )

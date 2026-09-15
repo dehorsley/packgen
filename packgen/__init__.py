@@ -13,6 +13,7 @@ from packgen.errors import (
 from packgen.generators import GeneratedPair, json, lengths, pack
 from packgen.model import Field, Schema, Struct
 from packgen.parser import parse_header, parse_source
+from packgen.version import __version__
 
 __all__ = [
     "Field",
@@ -23,6 +24,7 @@ __all__ = [
     "Struct",
     "UnknownTypeError",
     "UnsupportedTypeError",
+    "__version__",
     "json",
     "lengths",
     "pack",
