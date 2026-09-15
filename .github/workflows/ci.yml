@@ -1,0 +1,93 @@
+name: CI
+
+on:
+  push:
+    branches: [master, refactor]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uvx ruff check packgen tests
+      - run: uvx ruff format --check packgen tests
+      - run: uvx mypy --strict --ignore-missing-imports packgen
+
+  test:
+    # The generated code is checked against whichever C compiler is present,
+    # so this matrix is testing the output as much as the generator.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        python: ["3.10", "3.11", "3.12", "3.13"]
+        cc: [gcc, clang]
+        exclude:
+          # gcc on the macOS runners is a thin alias for clang.
+          - os: macos-latest
+            cc: gcc
+    runs-on: ${{ matrix.os }}
+    env:
+      CC: ${{ matrix.cc }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install jansson
+        run: |
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            sudo apt-get update && sudo apt-get install -y libjansson-dev pkg-config
+          else
+            brew install jansson pkg-config
+          fi
+      - run: uv sync
+      - run: uv run pytest -q
+
+  coverage:
+    # Every line and branch of the generated C must execute, otherwise the
+    # sanitiser results below only cover part of it.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: sudo apt-get update && sudo apt-get install -y llvm clang
+      - run: uv sync
+      - name: Generated-C coverage must be 100%
+        run: uv run python tools/check_c_coverage.py
+
+  big-endian:
+    # packgen generates byte-order-specific code, so the one thing that can
+    # only be checked on a big-endian machine is whether the *host* byte order
+    # leaks into the result.  s390x under QEMU is the cheap way to find out.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: uraimo/run-on-arch-action@v2
+        with:
+          arch: s390x
+          distro: ubuntu_latest
+          githubToken: ${{ github.token }}
+          install: |
+            apt-get update -q
+            apt-get install -y python3 python3-pip python3-venv gcc libjansson-dev pkg-config
+          run: |
+            python3 -m venv /tmp/venv
+            /tmp/venv/bin/pip install --quiet tree-sitter tree-sitter-c pytest
+            /tmp/venv/bin/pip install --quiet --no-deps -e .
+            /tmp/venv/bin/python -c "import sys; print('byte order:', sys.byteorder)"
+            /tmp/venv/bin/python -m pytest tests/ -q
+
+  fuzz:
+    # The committed suite runs a handful of seeds to stay quick; this sweeps a
+    # far wider range of randomly generated headers against the independent
+    # Python reference implementation.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync
+      - run: uv run python tools/fuzz_sweep.py --cases 400
