@@ -272,6 +272,45 @@ function, line and branch coverage of the generated `.c` for both byte orders. A
 and asserts it *is* caught, so the suite cannot go quietly inert if the
 sanitiser flags ever stop reaching the compiler.
 
+### Proving the round trip
+
+`tools/cbmc_verify.py` proves, rather than samples, two properties of the
+generated pack/unpack code using [CBMC][]:
+
+- **identity** -- `marshal(unmarshal(b)) == b`, for every byte sequence `b`,
+  when the struct holds no `bool`
+- **idempotence** -- `f(f(b)) == f(b)` where `f = marshal . unmarshal`, for
+  every struct. This is the precise form of the one documented asymmetry:
+  a `bool` normalises on the first pass, so identity does not hold, but
+  stability after that pass does.
+
+plus array bounds, pointer validity, and signed and unsigned arithmetic
+overflow, over the same universally quantified input.
+
+```
+python tools/cbmc_verify.py tests/headers/dbbcpacket.h
+python tools/cbmc_verify.py --random 20 --endian little
+```
+
+Bounded model checking is normally incomplete -- a bug past the unwind
+limit is invisible. packgen escapes that: every loop it emits has a
+constant trip count fixed by the struct layout, never by the data, so
+`--unwinding-assertions` passes and the result is a proof rather than an
+approximation. The whole DBBC header, including the 6208 byte packet,
+proves in about 40 seconds.
+
+Two things this deliberately does not do. `--conversion-check` is off,
+because it asks whether a conversion preserves its value and packing is
+deliberately lossy -- `(uint8_t)(x >> 8)` is a byte extraction, well
+defined by C99 6.3.1.3p2 but not value preserving. And a round trip is
+blind to a *symmetric* error: byte-swapping a field in both directions
+leaves it self-consistent, and CBMC reports success. That is exactly what
+the differential test against `tests/reference.py` catches, and why both
+exist -- the proof covers all inputs for one implementation, the reference
+covers one input against an independent implementation.
+
+[CBMC]: https://www.cprover.org/cbmc/
+
 `tests/test_fuzz.py` does the same on randomly generated headers, across both
 byte orders. A failure prints the seed, which reproduces the header exactly. The committed suite runs a small number of seeds to stay
 quick; the generator in `tests/random_headers.py` takes any seed, and a

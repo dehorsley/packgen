@@ -91,3 +91,17 @@ jobs:
       - uses: astral-sh/setup-uv@v5
       - run: uv sync
       - run: uv run python tools/fuzz_sweep.py --cases 400
+
+  prove:
+    # CBMC proves the round trip and memory safety for *all* inputs, where
+    # the differential tests sample.  Separate job: it is slower than the
+    # rest and depends on a tool the other jobs do not need.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: sudo apt-get update && sudo apt-get install -y cbmc
+      - run: uv sync
+      - run: uv run python tools/cbmc_verify.py tests/headers/dbbcpacket.h
+      - run: uv run python tools/cbmc_verify.py --random 8
+      - run: uv run python tools/cbmc_verify.py --random 8 --endian little
