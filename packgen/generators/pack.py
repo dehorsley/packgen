@@ -30,6 +30,7 @@ from packgen.generators.common import (
     BYTE_TYPES,
     GeneratedPair,
     array_loops,
+    check_no_macro_collisions,
     check_packable,
     pack_statements,
     unpack_expression,
@@ -85,6 +86,21 @@ def generate(
     """Generate the pack/unpack header and source for ``schema``."""
     if endian not in {"little", "big"}:
         raise ValueError(f"endian must be 'little' or 'big', not {endian!r}")
+
+    check_no_macro_collisions(
+        schema,
+        (
+            name
+            for struct in schema
+            for name in (
+                lengths.length_name(struct.name),
+                f"unmarshal_{struct.name}",
+                f"marshal_{struct.name}",
+                f"packgen_unpack_{struct.name}",
+                f"packgen_pack_{struct.name}",
+            )
+        ),
+    )
 
     # Resolving every field up front means a bad header fails before any
     # output is produced, rather than emitting half a file.

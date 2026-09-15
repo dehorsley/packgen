@@ -4,7 +4,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 
@@ -22,6 +22,31 @@ class GeneratedPair:
 
     header: str
     source: str
+
+
+def check_no_macro_collisions(schema: Schema, names: Iterable[str]) -> None:
+    """Refuse to emit a name the source header already defines as a macro.
+
+    Generated code includes the source header, so emitting ``len_X`` when
+    the header already has ``#define len_X 999`` is a macro
+    redefinition: a hard error under ``-Werror``, and worse without it,
+    where it is only a warning and packgen's definition silently wins --
+    quietly changing what the caller's own macro means.
+
+    packgen already knows every macro the header defines, so this is
+    catchable up front rather than in the user's build.
+    """
+    clashes = sorted(set(names) & schema.macros)
+    if not clashes:
+        return
+    listed = ", ".join(repr(name) for name in clashes)
+    plural = len(clashes) > 1
+    raise UnsupportedTypeError(
+        f"the header already defines {listed} as "
+        f"{'macros' if plural else 'a macro'}, and packgen needs "
+        f"{'those names' if plural else 'that name'} for the code it "
+        f"generates; rename to avoid the collision"
+    )
 
 
 def check_packable(schema: Schema, field: Field, struct_name: str) -> str:

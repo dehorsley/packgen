@@ -757,3 +757,66 @@ class TestTreeSitterCoupling:
             assert requirement.specifier.contains(installed), (
                 f"{requirement.name} {installed} is outside {requirement.specifier}"
             )
+
+
+class TestFunctionLikeMacros:
+    """A function-like macro is still a defined name.
+
+    packgen cannot expand one, but #ifdef of it is true, and its name
+    still occupies the identifier namespace the generated code writes
+    into.  Collecting only object-like #defines made both of those
+    wrong.
+    """
+
+    def test_ifdef_of_a_function_like_macro_is_true(self):
+        """This one silently dropped the struct before it was fixed."""
+        schema = parse_source(
+            dedent(
+                """
+                #include <stdint.h>
+                #define HAVE_EXT(x) x
+                typedef struct { uint16_t a; } base_t;
+                #ifdef HAVE_EXT
+                typedef struct { uint32_t b; } ext_t;
+                #endif
+                """
+            ).encode()
+        )
+        assert [s.name for s in schema] == ["base_t", "ext_t"]
+
+    def test_ifndef_of_a_function_like_macro_is_false(self):
+        schema = parse_source(
+            dedent(
+                """
+                #include <stdint.h>
+                #define HAVE_EXT(x) x
+                #ifndef HAVE_EXT
+                typedef struct { uint32_t b; } dead_t;
+                #endif
+                typedef struct { uint16_t a; } live_t;
+                """
+            ).encode()
+        )
+        assert [s.name for s in schema] == ["live_t"]
+
+    def test_its_name_reaches_the_schema(self):
+        schema = parse_source(b"#define MAX(a, b) 0\ntypedef struct { char c; } s_t;\n")
+        assert "MAX" in schema.macros
+
+    def test_cannot_be_used_as_an_array_bound(self):
+        with pytest.raises(UnsupportedTypeError, match="function-like macro"):
+            parse_source(
+                b"#include <stdint.h>\n"
+                b"#define N(x) 4\n"
+                b"typedef struct { uint8_t a[N]; } s_t;\n"
+            ).size_of("s_t")
+
+
+class TestMacroNamesAreCollected:
+    def test_object_like_defines_reach_the_schema(self):
+        schema = parse_source(b"#define NCHAN 8\ntypedef struct { char c; } s_t;\n")
+        assert "NCHAN" in schema.macros
+
+    def test_a_header_with_no_macros_has_none(self):
+        schema = parse_source(b"typedef struct { char c; } s_t;\n")
+        assert schema.macros == frozenset()

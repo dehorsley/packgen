@@ -13,7 +13,11 @@ from __future__ import annotations
 from contextlib import ExitStack
 
 from packgen.errors import UnsupportedTypeError
-from packgen.generators.common import GeneratedPair, check_packable
+from packgen.generators.common import (
+    GeneratedPair,
+    check_no_macro_collisions,
+    check_packable,
+)
 from packgen.model import BOOL_TYPES, INT_TYPES, REAL_TYPES, Field, Schema, Struct
 from packgen.writer import Writer, banner, include_guard
 
@@ -53,6 +57,14 @@ def generate(
     schema: Schema, *, source_header: str, generated_header: str
 ) -> GeneratedPair:
     """Generate the JSON marshalling header and source for ``schema``."""
+    check_no_macro_collisions(
+        schema,
+        [
+            "packgen_json_uint64",
+            "packgen_strnlen",
+            *(f"marshal_json_{struct.name}" for struct in schema),
+        ],
+    )
     resolved = {
         struct.name: [_resolve(schema, f, struct.name) for f in struct.fields]
         for struct in schema

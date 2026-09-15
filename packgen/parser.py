@@ -270,12 +270,15 @@ class _Parser:
             structs=tuple(self.structs),
             aliases=dict(self.aliases),
             unsupported=dict(self.unsupported),
+            macros=frozenset(self.defined_names),
         )
 
     def _walk(self, nodes: list[Node]) -> None:
         for node in nodes:
             if node.type == "preproc_def":
                 self._collect_define(node)
+            elif node.type == "preproc_function_def":
+                self._collect_function_define(node)
             elif node.type == "type_definition":
                 self._collect_typedef(node)
             elif node.type in {"enum_specifier", "declaration"}:
@@ -422,6 +425,22 @@ class _Parser:
             self._define(_text(name), self._eval_text(value.text or b""), "")
         except UnsupportedTypeError as exc:
             self._define(_text(name), None, str(exc))
+
+    def _collect_function_define(self, node: Node) -> None:
+        """Record a function-like macro's name, but never a value.
+
+        packgen cannot expand one, so it is poisoned for array-bound
+        purposes.  The name still matters twice over: ``#ifdef FOO`` is
+        true for a function-like macro, and a header defining
+        ``unmarshal_s_t(x)`` would silently eat the declaration packgen
+        emits for struct ``s_t``.
+        """
+        name = _child(node, "name")
+        if name is None:
+            return
+        text = _text(name)
+        self.defined_names.add(text)
+        self._define(text, None, f"{text!r} is a function-like macro")
 
     def _collect_enumerators(self, node: Node) -> None:
         for enum in self._descend(node, "enumerator_list"):

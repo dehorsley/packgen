@@ -250,3 +250,70 @@ class TestGuards:
     def test_pointer_fields_are_rejected(self):
         with pytest.raises(UnsupportedTypeError, match="pointer"):
             generate("typedef struct { char *a; } s_t;")
+
+
+class TestMacroCollisions:
+    """Generated code includes the source header, so a name packgen
+    emits that the header already defines is a macro redefinition --
+    a hard error under -Werror, and worse without it, where packgen's
+    definition silently wins and changes what the caller's macro means.
+    """
+
+    @pytest.mark.parametrize(
+        "macro",
+        [
+            "#define len_s_t 999",
+            "#define unmarshal_s_t 1",
+            "#define marshal_s_t 1",
+            "#define packgen_pack_s_t 1",
+            "#define packgen_unpack_s_t 1",
+            "#define len_s_t(x) 999",
+            "#define unmarshal_s_t(a, b, c) 0",
+        ],
+    )
+    def test_refused(self, macro: str):
+        source = dedent(
+            f"""
+            #include <stdint.h>
+            {macro}
+            typedef struct {{ uint16_t a; }} s_t;
+            """
+        ).encode()
+        with pytest.raises(UnsupportedTypeError, match="already defines"):
+            pack.generate(
+                parse_source(source),
+                source_header="h.h",
+                generated_header="h_unpack.h",
+            )
+
+    def test_names_every_clashing_macro(self):
+        source = dedent(
+            """
+            #include <stdint.h>
+            #define len_s_t 1
+            #define marshal_s_t 2
+            typedef struct { uint16_t a; } s_t;
+            """
+        ).encode()
+        with pytest.raises(UnsupportedTypeError) as caught:
+            pack.generate(
+                parse_source(source),
+                source_header="h.h",
+                generated_header="h_unpack.h",
+            )
+        assert "'len_s_t'" in str(caught.value)
+        assert "'marshal_s_t'" in str(caught.value)
+
+    def test_an_unrelated_macro_is_fine(self):
+        source = dedent(
+            """
+            #include <stdint.h>
+            #define NCHAN 8
+            #define MAX(a, b) ((a) > (b) ? (a) : (b))
+            typedef struct { uint16_t a[NCHAN]; } s_t;
+            """
+        ).encode()
+        generated = pack.generate(
+            parse_source(source), source_header="h.h", generated_header="h_unpack.h"
+        )
+        assert "#define len_s_t ((size_t)16)" in generated.header

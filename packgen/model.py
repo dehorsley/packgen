@@ -113,6 +113,10 @@ class Schema:
     aliases: dict[str, str] = field(default_factory=dict)
     #: Typedef names packgen saw but cannot pack, mapped to the reason why.
     unsupported: dict[str, str] = field(default_factory=dict)
+    #: Every macro name the source header defines.  Generated code is
+    #: included *after* that header, so anything packgen emits at file
+    #: scope that collides with one of these is a macro redefinition.
+    macros: frozenset[str] = frozenset()
 
     def __post_init__(self) -> None:
         self._by_name = {s.name: s for s in self.structs}
