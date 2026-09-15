@@ -44,11 +44,37 @@ EXTRA_SANITIZERS = ["integer", "implicit-conversion", "local-bounds", "nullabili
 PROBE = "int main(void) { return 0; }\n"
 
 
+@cache
 def find_compiler() -> str | None:
+    """The first C compiler that is present *and* actually works.
+
+    Checking only that the binary exists is not enough: an Xcode licence
+    that needs re-accepting, a part-installed toolchain or a missing SDK
+    all leave a `cc` on PATH that fails every invocation.  That turned
+    what should be a clean skip into dozens of failures blaming the
+    generated code for a broken machine, so compile a trivial program
+    before believing in it.
+    """
     for name in (os.environ.get("CC"), "cc", "clang", "gcc"):
-        if name and shutil.which(name):
+        if not name or not shutil.which(name):
+            continue
+        if _compiles(name):
             return name
     return None
+
+
+def _compiles(compiler: str) -> bool:
+    with tempfile.TemporaryDirectory() as tmp:
+        source = Path(tmp) / "probe.c"
+        source.write_text(PROBE, encoding="utf-8")
+        try:
+            result = subprocess.run(
+                [compiler, str(source), "-o", str(Path(tmp) / "probe")],
+                capture_output=True,
+            )
+        except OSError:
+            return False
+        return result.returncode == 0
 
 
 @cache
