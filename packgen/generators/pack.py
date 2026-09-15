@@ -44,7 +44,7 @@ from packgen.model import (
     Struct,
     unsigned_equivalent,
 )
-from packgen.writer import BANNER, Writer, include_guard
+from packgen.writer import Writer, banner, include_guard
 
 STATIC_ASSERT = """\
 #ifndef PACKGEN_STATIC_ASSERT
@@ -94,16 +94,18 @@ def generate(
     }
 
     return GeneratedPair(
-        header=_header(schema, source_header, generated_header),
-        source=_source(schema, resolved, generated_header, endian),
+        header=_header(schema, source_header, generated_header, endian),
+        source=_source(schema, resolved, source_header, generated_header, endian),
     )
 
 
-def _header(schema: Schema, source_header: str, generated_header: str) -> str:
+def _header(
+    schema: Schema, source_header: str, generated_header: str, endian: str
+) -> str:
     guard = include_guard(generated_header)
     writer = Writer()
     writer.lines(
-        BANNER,
+        banner(source_header=source_header, endian=endian),
         f"#ifndef {guard}",
         f"#define {guard}",
         "",
@@ -149,12 +151,13 @@ def _header(schema: Schema, source_header: str, generated_header: str) -> str:
 def _source(
     schema: Schema,
     resolved: dict[str, list[str]],
+    source_header: str,
     generated_header: str,
     endian: str,
 ) -> str:
     writer = Writer()
     writer.lines(
-        BANNER,
+        banner(source_header=source_header, endian=endian),
         "#include <string.h>",
         "",
         f'#include "{generated_header}"',

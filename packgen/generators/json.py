@@ -15,7 +15,7 @@ from contextlib import ExitStack
 from packgen.errors import UnsupportedTypeError
 from packgen.generators.common import GeneratedPair, check_packable
 from packgen.model import BOOL_TYPES, INT_TYPES, REAL_TYPES, Field, Schema, Struct
-from packgen.writer import BANNER, Writer, include_guard
+from packgen.writer import Writer, banner, include_guard
 
 FAIL = "{ json_decref(root); return NULL; }"
 
@@ -59,7 +59,7 @@ def generate(
     }
     return GeneratedPair(
         header=_header(schema, source_header, generated_header),
-        source=_source(schema, resolved, generated_header),
+        source=_source(schema, resolved, source_header, generated_header),
     )
 
 
@@ -83,7 +83,7 @@ def _header(schema: Schema, source_header: str, generated_header: str) -> str:
     guard = include_guard(generated_header)
     writer = Writer()
     writer.lines(
-        BANNER,
+        banner(source_header=source_header),
         f"#ifndef {guard}",
         f"#define {guard}",
         "",
@@ -114,7 +114,10 @@ def _header(schema: Schema, source_header: str, generated_header: str) -> str:
 
 
 def _source(
-    schema: Schema, resolved: dict[str, list[str]], generated_header: str
+    schema: Schema,
+    resolved: dict[str, list[str]],
+    source_header: str,
+    generated_header: str,
 ) -> str:
     needs_uint64 = any("uint64_t" in types for types in resolved.values())
     needs_strnlen = any(
@@ -124,7 +127,7 @@ def _source(
     )
 
     writer = Writer()
-    writer.line(BANNER)
+    writer.line(banner(source_header=source_header))
     if needs_uint64:
         writer.lines("#include <inttypes.h>", "#include <stdio.h>")
     writer.lines("#include <stddef.h>", "", f'#include "{generated_header}"', "")
