@@ -9,14 +9,42 @@ description = "A tool to generate C struct packing and unpacking routines"
 authors = [{ name = "David Horsley", email = "david.e.horsley@gmail.com" }]
 license = { file = "LICENSE" }
 readme = "README.md"
-requires-python = ">=3.6"
-dependencies = ["pycparser"]
+requires-python = ">=3.10"
+dependencies = [
+    "tree-sitter>=0.23",
+    "tree-sitter-c>=0.23",
+]
 
 [project.scripts]
 packgen = "packgen.__main__:main"
 
 [tool.setuptools_scm]
 
+[tool.setuptools.packages.find]
+include = ["packgen*"]
+
 [tool.pytest.ini_options]
 addopts = ["--import-mode=importlib"]
 testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 88
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
+
+[tool.ruff.lint.per-file-ignores]
+# The tools add the repo root to sys.path before importing from it.
+"tools/*.py" = ["E402"]
+
+[tool.mypy]
+python_version = "3.10"
+strict = true
+ignore_missing_imports = true
+files = ["packgen"]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]

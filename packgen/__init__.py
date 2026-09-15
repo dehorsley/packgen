@@ -1,32 +1,31 @@
+# This file covered by GPL 3 license
+# C. David Horsley 2025
+"""Generate C struct packing and unpacking routines from a header file."""
+
 from __future__ import annotations
 
-from pathlib import Path
-
-from pycparser import c_ast, parse_file
-
-from packgen.packgen import (
-    JsonMarshalGenerator,
-    LengthGenerator,
-    UnmarshalGenerator,
+from packgen.errors import (
+    PackgenError,
+    ParseError,
+    UnknownTypeError,
+    UnsupportedTypeError,
 )
-
-
-def parse_file_with_fake_libc(filename: str | Path) -> c_ast.FileAST:
-    ast = parse_file(
-        str(filename),
-        use_cpp=True,
-        cpp_path="gcc",
-        cpp_args=[
-            "-E",
-            "-I%s" % (Path(__file__).resolve().parent / "fake_libc_include"),
-        ],  # type: ignore
-    )
-    return ast
-
+from packgen.generators import GeneratedPair, json, lengths, pack
+from packgen.model import Field, Schema, Struct
+from packgen.parser import parse_header, parse_source
 
 __all__ = [
-    "UnmarshalGenerator",
-    "JsonMarshalGenerator",
-    "LengthGenerator",
-    "parse_file_with_fake_libc",
+    "Field",
+    "GeneratedPair",
+    "PackgenError",
+    "ParseError",
+    "Schema",
+    "Struct",
+    "UnknownTypeError",
+    "UnsupportedTypeError",
+    "json",
+    "lengths",
+    "pack",
+    "parse_header",
+    "parse_source",
 ]
