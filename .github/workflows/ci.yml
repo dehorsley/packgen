@@ -12,9 +12,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
-      - run: uvx ruff check packgen tests
-      - run: uvx ruff format --check packgen tests
-      - run: uvx mypy --strict --ignore-missing-imports packgen
+      - run: uv run ruff check packgen tests tools
+      - run: uv run ruff format --check packgen tests tools
+      - run: uv run mypy
 
   test:
     # The generated code is checked against whichever C compiler is present,

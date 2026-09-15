@@ -60,4 +60,9 @@ dev = [
     # Used by the test that checks the installed deps match the pins.
     # It arrives with pytest anyway; declared so that stays deliberate.
     "packaging>=23",
+    # Locked rather than run through uvx, so a new ruff or mypy release
+    # cannot fail CI on a day nobody touched the code, and so a local
+    # `uv run mypy` checks with the same version CI does.
+    "mypy>=1.15",
+    "ruff>=0.14",
 ]
