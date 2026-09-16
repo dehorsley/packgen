@@ -272,6 +272,36 @@ function, line and branch coverage of the generated `.c` for both byte orders. A
 and asserts it *is* caught, so the suite cannot go quietly inert if the
 sanitiser flags ever stop reaching the compiler.
 
+### Checking the parse against the compiler
+
+Everything above validates the *emitter*. None of it can see a parser
+bug, and that is not a theoretical worry -- `tests/reference.py` looks
+like an independent implementation, but it walks the same `Schema`
+packgen produced. Reverse every struct's field order in the parser and
+the generated C packs fields backwards, the reference expects them
+backwards, and they agree: 60 differential cases pass, and every CBMC
+proof still succeeds, because the round trip is still exact.
+
+`tests/layout_oracle.py` closes that by asking the only authority on what
+a C header means. A probe program compiled against the *original* header
+reports `offsetof` and `sizeof` for every field packgen claims, and the
+result is checked against the Schema:
+
+- offsets must increase in packgen's field order, and fields must not
+  overlap — catches reordering
+- each field's byte span must match packgen's element size times its
+  element count — catches a wrong array bound or a misresolved type
+- every gap must be smaller than the struct's alignment, so it is padding
+  rather than a field packgen failed to see
+- the in-memory struct must be at least the packed size
+
+A nested struct's element size comes from the compiler rather than from
+packgen's own arithmetic, so a parser bug cannot cancel itself out.
+
+Four tests deliberately corrupt the Schema — reordering fields, widening
+an array, narrowing a type, dropping a field — and assert the compiler
+contradicts each one, so the check cannot quietly stop working.
+
 ### Proving the round trip
 
 `tools/cbmc_verify.py` proves, rather than samples, two properties of the

@@ -105,3 +105,5 @@ jobs:
       - run: uv run python tools/cbmc_verify.py tests/headers/dbbcpacket.h
       - run: uv run python tools/cbmc_verify.py --random 8
       - run: uv run python tools/cbmc_verify.py --random 8 --endian little
+      # The layout oracle runs in the main test job; it needs only a
+      # C compiler, which every matrix entry already has.
