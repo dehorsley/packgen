@@ -170,8 +170,8 @@ class TestFieldCode:
             typedef struct { inner_t a; } outer_t;
             """
         ).source
-        assert "p = packgen_unpack_inner_t(&t->a, p);" in source
-        assert "p = packgen_pack_inner_t(&t->a, p);" in source
+        assert "p = packgen_unmarshal_inner_t(&t->a, p);" in source
+        assert "p = packgen_marshal_inner_t(&t->a, p);" in source
 
 
 def _function_body(source: str, signature: str) -> str:
@@ -197,29 +197,29 @@ class TestSharedCores:
     def test_cores_are_static_and_take_no_length(self):
         source = generate(NESTED).source
         assert (
-            "static const uint8_t *packgen_unpack_outer_t(outer_t *t, "
+            "static const uint8_t *packgen_unmarshal_outer_t(outer_t *t, "
             "const uint8_t *p)" in source
         )
         assert (
-            "static uint8_t *packgen_pack_outer_t(const outer_t *t, uint8_t *p)"
+            "static uint8_t *packgen_marshal_outer_t(const outer_t *t, uint8_t *p)"
             in source
         )
 
     def test_cores_are_forward_declared_before_use(self):
         source = generate(NESTED).source
         declaration = (
-            "static const uint8_t *packgen_unpack_inner_t(inner_t *t, "
+            "static const uint8_t *packgen_unmarshal_inner_t(inner_t *t, "
             "const uint8_t *p);"
         )
         assert declaration in source
         assert source.index(declaration) < source.index(
-            "static const uint8_t *packgen_unpack_inner_t(inner_t *t, "
+            "static const uint8_t *packgen_unmarshal_inner_t(inner_t *t, "
             "const uint8_t *p)\n"
         )
 
     def test_the_recursion_carries_no_bounds_check(self):
         source = generate(NESTED).source
-        core = _function_body(source, "static const uint8_t *packgen_unpack_outer_t")
+        core = _function_body(source, "static const uint8_t *packgen_unmarshal_outer_t")
         assert "return -1" not in core
         assert "len_" not in core
 
@@ -228,11 +228,11 @@ class TestSharedCores:
         entry = _function_body(source, "ptrdiff_t unmarshal_outer_t")
         assert "if (t == NULL || data == NULL) return -1;" in entry
         assert "if (n < len_outer_t) return -1;" in entry
-        assert "return packgen_unpack_outer_t(t, data) - data;" in entry
+        assert "return packgen_unmarshal_outer_t(t, data) - data;" in entry
 
     def test_a_shared_type_is_emitted_once(self):
         source = generate(NESTED).source
-        assert source.count("static const uint8_t *packgen_unpack_inner_t") == 2
+        assert source.count("static const uint8_t *packgen_unmarshal_inner_t") == 2
 
 
 class TestGuards:
@@ -240,7 +240,7 @@ class TestGuards:
         source = generate("typedef struct { uint32_t a; } s_t;").source
         body = _function_body(source, "ptrdiff_t unmarshal_s_t")
         assert body.index("if (n < len_s_t) return -1;") < body.index(
-            "packgen_unpack_s_t(t, data)"
+            "packgen_unmarshal_s_t(t, data)"
         )
 
     def test_null_pointers_are_rejected(self):
@@ -265,8 +265,8 @@ class TestMacroCollisions:
             "#define len_s_t 999",
             "#define unmarshal_s_t 1",
             "#define marshal_s_t 1",
-            "#define packgen_pack_s_t 1",
-            "#define packgen_unpack_s_t 1",
+            "#define packgen_marshal_s_t 1",
+            "#define packgen_unmarshal_s_t 1",
             "#define len_s_t(x) 999",
             "#define unmarshal_s_t(a, b, c) 0",
         ],
