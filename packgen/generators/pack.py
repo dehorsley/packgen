@@ -69,13 +69,11 @@ def marshal_signature(name: str) -> str:
 
 
 def unpack_core_signature(name: str) -> str:
-    return (
-        f"static const uint8_t *packgen_unmarshal_{name}({name} *t, const uint8_t *p)"
-    )
+    return f"static const uint8_t *unmarshal_{name}_core({name} *t, const uint8_t *p)"
 
 
 def pack_core_signature(name: str) -> str:
-    return f"static uint8_t *packgen_marshal_{name}(const {name} *t, uint8_t *p)"
+    return f"static uint8_t *marshal_{name}_core(const {name} *t, uint8_t *p)"
 
 
 def generate(
@@ -98,8 +96,8 @@ def generate(
                 lengths.length_name(struct.name),
                 f"unmarshal_{struct.name}",
                 f"marshal_{struct.name}",
-                f"packgen_unmarshal_{struct.name}",
-                f"packgen_marshal_{struct.name}",
+                f"unmarshal_{struct.name}_core",
+                f"marshal_{struct.name}_core",
             )
         ),
     )
@@ -245,7 +243,7 @@ def _entry_point(
         writer.line("if (t == NULL || data == NULL) return -1;")
         writer.line(f"if (n < {lengths.length_name(struct.name)}) return -1;")
         writer.line()
-        writer.line(f"return packgen_{verb}_{struct.name}(t, data) - data;")
+        writer.line(f"return {verb}_{struct.name}_core(t, data) - data;")
 
 
 def _emit_struct(
@@ -278,7 +276,7 @@ def _emit_field(
     with array_loops(writer, field) as (accessor, _depth):
         if schema.is_struct(type_):
             verb = "unmarshal" if unpack else "marshal"
-            writer.line(f"p = packgen_{verb}_{type_}(&{accessor}, p);")
+            writer.line(f"p = {verb}_{type_}_core(&{accessor}, p);")
         elif unpack:
             _unmarshal_value(writer, accessor, type_, endian)
         else:
