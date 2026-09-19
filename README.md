@@ -329,7 +329,61 @@ constant trip count fixed by the struct layout, never by the data, so
 approximation. The whole DBBC header, including the 6208 byte packet,
 proves in about 40 seconds.
 
-Two things this deliberately does not do. `--conversion-check` is off,
+Three properties are proved per struct:
+
+| property | claim |
+| --- | --- |
+| `roundtrip` | identity, or idempotence for a struct holding a `bool` |
+| `no-leak` | every one of the `len_X` output bytes is written |
+| `contract` | for **every** `n`, not two chosen values: `n >= len_X` returns `len_X` and touches nothing past it; `n < len_X` returns `-1` and writes nothing at all, to the buffer or to the struct |
+
+`no-leak` marshals the same struct into two buffers pre-filled with
+different bytes and requires the results to be equal. Any byte marshal
+failed to write would keep its fill and the two would differ, so equality
+means no part of the caller's memory can reach the wire — the
+struct-padding leak that is a well-worn CVE class elsewhere.
+
+`contract` is the only one of the three that catches a write occurring
+*before* the length check, which is a real failure mode and one nothing
+else here tests.
+
+It is also the one that does not scale: it copies and compares the whole
+struct twice over a symbolic length, and the 6208 byte DBBC packet does
+not finish in 400 seconds even with the range narrowed to the boundary.
+Since the entry-point guard is structurally identical for every struct,
+proving it across the small and medium ones covers the pattern; larger
+structs are reported as skipped rather than quietly dropped, and
+`--max-contract-bytes` moves the line. The whole DBBC header takes about
+80 seconds on that basis.
+
+### Proving the JSON error paths
+
+Every `marshal_json_X` has a `NULL`-return path for every allocation it
+makes, and no test reaches any of them — jansson does not fail on demand.
+`tools/cbmc_json.py` replaces jansson with a model whose allocators fail
+*nondeterministically*, so CBMC explores every combination of which
+allocations succeed and which fail at once, and tracks ownership well
+enough to tell a leak from a clean unwind:
+
+- nothing allocated is still live when `marshal_json_X` returns `NULL`
+- nothing is live after the caller's `json_decref` on success
+- `json_decref` is never handed an already-freed object
+
+The model reflects two things about jansson's real contract: the
+`*_set_new` functions steal the reference even when they fail, which is
+why the generated error paths only drop `root`; and ownership nests, so
+freeing is transitive. Getting either wrong would make correct code look
+buggy.
+
+Injecting each mistake confirms the model is not vacuous — a forgotten
+`json_decref(root)`, a doubled one, and a `json_decref` of a reference
+jansson already stole are all caught. That last is the classic jansson
+error, and the generated code is now proved to avoid it.
+
+This one is expensive: failure interleavings multiply, so budget roughly
+a minute per struct and keep the header small.
+
+Two things the round-trip proof deliberately does not do. `--conversion-check` is off,
 because it asks whether a conversion preserves its value and packing is
 deliberately lossy -- `(uint8_t)(x >> 8)` is a byte extraction, well
 defined by C99 6.3.1.3p2 but not value preserving. And a round trip is
