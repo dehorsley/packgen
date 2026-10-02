@@ -30,9 +30,9 @@ unsigned arithmetic overflow -- over the same universally quantified input.
 Note --conversion-check is deliberately NOT enabled.  It asks whether a
 conversion is value preserving, and packing is deliberately lossy:
 (uint8_t)(x >> 8) is a byte extraction, well defined in C99 6.3.1.3p2 but
-not value preserving.  The one conversion that really is implementation
-defined, (int32_t)(uint32_t)v when v exceeds INT32_MAX, is the documented
-choice to decode signed integers through their unsigned counterpart.
+not value preserving.  Signed integers are decoded by memcpy from their
+unsigned counterpart rather than by a cast, so no conversion in the decode
+is implementation defined either.
 """
 
 from __future__ import annotations

@@ -38,6 +38,7 @@ from packgen.generators.common import (
 from packgen.model import (
     BOOL_TYPES,
     INT_TYPES,
+    PRIMITIVE_SIZES,
     REAL_TYPES,
     SIGNED_INT_TYPES,
     Field,
@@ -284,19 +285,35 @@ def _emit_field(
 
 
 def _unmarshal_value(writer: Writer, accessor: str, type_: str, endian: str) -> None:
+    if type_ == "uint8_t":
+        writer.line(f"{accessor} = *p++;")
+        return
+
     if type_ in BYTE_TYPES:
-        writer.line(f"{accessor} = ({type_})*p++;")
+        # int8_t, and char where it is signed: converting a byte above 127
+        # to a signed type is implementation defined, copying it is not.
+        writer.line(f"memcpy(&{accessor}, p, 1);")
+        writer.line("p += 1;")
         return
 
     if type_ in BOOL_TYPES:
         writer.line(f"{accessor} = (*p++ != 0);")
         return
 
-    if type_ in REAL_TYPES:
-        size = REAL_TYPES[type_]
+    if type_ in REAL_TYPES or type_ in SIGNED_INT_TYPES:
+        # Assemble the bits in the unsigned type of the same width, then
+        # copy them.  For float and double that is the only portable way
+        # to reinterpret bits.  For intN_t it avoids the cast back from
+        # unsigned, which is implementation defined above INTN_MAX (C99
+        # 6.3.1.3p3), while intN_t is guaranteed two's complement with no
+        # padding (7.18.1.1), so the copy is exact.  Either way compilers
+        # emit the same load and byte swap as a cast would.
+        size = PRIMITIVE_SIZES[type_]
         bits = unsigned_equivalent(type_)
         with writer.block():
-            writer.line(f"{bits} raw = {unpack_expression(bits, size, endian)};")
+            # The cast matters at 16 bits, where the shifts promote to int.
+            expression = unpack_expression(bits, size, endian)
+            writer.line(f"{bits} raw = ({bits})({expression});")
             writer.line(f"memcpy(&{accessor}, &raw, {size});")
         writer.line(f"p += {size};")
         return
@@ -304,13 +321,7 @@ def _unmarshal_value(writer: Writer, accessor: str, type_: str, endian: str) -> 
     if type_ in INT_TYPES:
         size = INT_TYPES[type_]
         bits = unsigned_equivalent(type_)
-        expression = unpack_expression(bits, size, endian)
-        if type_ in SIGNED_INT_TYPES:
-            # Wrap through the unsigned type first: the narrowing conversion
-            # back to the signed type is the only implementation-defined step.
-            writer.line(f"{accessor} = ({type_})({bits})({expression});")
-        else:
-            writer.line(f"{accessor} = ({bits})({expression});")
+        writer.line(f"{accessor} = ({bits})({unpack_expression(bits, size, endian)});")
         writer.line(f"p += {size};")
         return
 

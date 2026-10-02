@@ -132,9 +132,31 @@ class TestByteOrder:
 
 
 class TestFieldCode:
-    def test_signed_values_go_through_the_unsigned_type(self):
-        source = generate("typedef struct { int16_t a; } s_t;").source
-        assert "t->a = (int16_t)(uint16_t)(" in source
+    @pytest.mark.parametrize(
+        "type_, bits, size",
+        [
+            ("int16_t", "uint16_t", 2),
+            ("int32_t", "uint32_t", 4),
+            ("int64_t", "uint64_t", 8),
+        ],
+    )
+    def test_signed_values_are_copied_not_cast(self, type_, bits, size):
+        # (intN_t)(uintN_t)x is implementation defined above INTN_MAX;
+        # intN_t is guaranteed two's complement, so copying the bits is not.
+        source = generate(f"typedef struct {{ {type_} a; }} s_t;").source
+        assert f"{bits} raw = " in source
+        assert f"memcpy(&t->a, &raw, {size});" in source
+        assert f"({type_})" not in source
+
+    @pytest.mark.parametrize("type_", ["int8_t", "char"])
+    def test_signed_bytes_are_copied_not_cast(self, type_):
+        source = generate(f"typedef struct {{ {type_} a; }} s_t;").source
+        assert "memcpy(&t->a, p, 1);" in source
+        assert f"({type_})" not in source
+
+    def test_unsigned_bytes_are_plain_loads(self):
+        source = generate("typedef struct { uint8_t a; } s_t;").source
+        assert "t->a = *p++;" in source
 
     def test_reals_are_copied_bit_for_bit(self):
         source = generate("typedef struct { float a; } s_t;").source
