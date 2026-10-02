@@ -337,6 +337,34 @@ class TestConstantFolding:
         )
         assert parse_source(source).size_of("s_t") == 4
 
+    @pytest.mark.parametrize(
+        "define",
+        [
+            "#define N 4 // four",
+            "#define N (4) // four",
+            "#define N 4 /* four */",
+            "#define N /* four */ 4",
+        ],
+    )
+    def test_a_comment_after_the_value(self, define):
+        # A trailing // comment used to swallow the parenthesis packgen
+        # wraps the value in, so the constant came out unusable.
+        source = f"{define}\ntypedef struct {{ uint8_t a[N]; }} s_t;"
+        assert parse_source(source).size_of("s_t") == 4
+
+    def test_a_commented_value_still_folds_in_a_condition(self):
+        source = dedent(
+            """
+            #define VERSION 2 // current wire format
+            #if VERSION >= 2
+            typedef struct { uint32_t a; } s_t;
+            #else
+            typedef struct { uint16_t a; } s_t;
+            #endif
+            """
+        )
+        assert parse_source(source).size_of("s_t") == 4
+
     def test_a_constant_defined_two_ways_is_refused(self):
         # An unfoldable condition means both branches are walked, so silently
         # keeping the last one would generate a layout for whichever build the
@@ -433,6 +461,68 @@ class TestRejections:
         )
         with pytest.raises(UnsupportedTypeError, match="conditional compilation"):
             parse_source(source)
+
+    @pytest.mark.parametrize(
+        "first, second",
+        [
+            ("typedef uint16_t w_t;", "typedef uint32_t w_t;"),
+            ("typedef struct { uint32_t a; } w_t;", "typedef uint8_t w_t;"),
+            ("typedef uint8_t w_t;", "typedef struct { uint32_t a; } w_t;"),
+            ("typedef uint8_t w_t;", "typedef union { uint8_t a; } w_t;"),
+            ("typedef struct { uint8_t a; } w_t;", "typedef union { uint8_t a; } w_t;"),
+        ],
+    )
+    def test_typedef_meaning_two_things_under_an_unfoldable_condition(
+        self, first, second
+    ):
+        # Constants and structs were already refused here; a typedef that
+        # silently kept its last meaning would pick a layout for a build
+        # the caller may not be using.
+        source = dedent(
+            f"""
+            #if CONFIG_MACRO(1)
+            {first}
+            #else
+            {second}
+            #endif
+            """
+        )
+        with pytest.raises(UnsupportedTypeError, match="more than once"):
+            parse_source(source)
+
+    def test_an_identical_typedef_twice_is_fine(self):
+        # Repeating a typedef identically is legal C11.
+        source = dedent(
+            """
+            typedef uint16_t w_t;
+            typedef uint16_t w_t;
+            typedef struct { w_t a; } s_t;
+            """
+        )
+        assert parse_source(source).size_of("s_t") == 2
+
+    def test_a_forward_typedef_then_its_body_is_fine(self):
+        source = dedent(
+            """
+            typedef struct s s_t;
+            typedef struct s { uint32_t a; } s_t;
+            """
+        )
+        assert parse_source(source).size_of("s_t") == 4
+
+    def test_two_unpackable_meanings_do_not_poison_the_header(self):
+        # u_t cannot be packed either way; the rest of the header can.
+        source = dedent(
+            """
+            #if CONFIG_MACRO(1)
+            typedef union { uint8_t a; } u_t;
+            #else
+            typedef unsigned int u_t;
+            #endif
+            typedef struct { uint8_t a; } s_t;
+            """
+        )
+        assert parse_source(source).size_of("s_t") == 1
 
     def test_struct_defined_twice_under_an_unfoldable_condition(self):
         source = dedent(

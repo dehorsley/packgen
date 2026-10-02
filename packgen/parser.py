@@ -252,6 +252,9 @@ class _Parser:
         self.structs: list[Struct] = []
         self.aliases: dict[str, str] = {}
         self.unsupported: dict[str, str] = {}
+        #: What each typedef name was first defined as, so that a second
+        #: definition meaning something else is caught.  See `_claim`.
+        self._typedefs: dict[str, tuple[str, ...]] = {}
         self._parser = Parser(C_LANGUAGE)
 
     # -- entry point ----------------------------------------------------
@@ -342,7 +345,38 @@ class _Parser:
         except UnsupportedTypeError:
             return None
 
+    def _claim(self, name: str, meaning: tuple[str, ...], node: Node) -> None:
+        """Refuse a typedef name that a second definition gives another meaning.
+
+        Both branches of an unfoldable ``#if`` are walked, so ``word_t`` can
+        arrive once as ``uint16_t`` and once as ``uint32_t``.  Keeping either
+        would generate a layout for a build the caller may not be using.
+
+        Repeating a typedef identically is legal C11, and so is a bodiless
+        ``typedef struct foo foo_t;`` alongside the one that gives the body,
+        so those are let through.  Two unpackable meanings are also fine:
+        the name cannot be packed either way.
+        """
+        previous = self._typedefs.setdefault(name, meaning)
+        kinds = {previous[0], meaning[0]}
+        if (
+            previous == meaning
+            or kinds == {"struct", "forward"}
+            or kinds <= {"forward", "unsupported"}
+        ):
+            if meaning[0] == "struct":
+                self._typedefs[name] = meaning
+            return
+        raise UnsupportedTypeError(
+            self._error(
+                node,
+                f"{name!r} is defined more than once under a condition "
+                f"packgen could not fold, so it cannot choose a layout",
+            )
+        )
+
     def _add_struct(self, struct: Struct, node: Node) -> None:
+        self._claim(struct.name, ("struct",), node)
         if any(existing.name == struct.name for existing in self.structs):
             raise UnsupportedTypeError(
                 self._error(
@@ -480,7 +514,9 @@ class _Parser:
 
     def _eval_text(self, text: bytes) -> int:
         """Evaluate a fragment of C that was not parsed as an expression."""
-        tree = self._parser.parse(b"(" + text.strip() + b");")
+        # The newline ends any trailing `// comment` in the macro body, which
+        # would otherwise swallow the closing parenthesis.
+        tree = self._parser.parse(b"(" + text.strip() + b"\n);")
         statement = tree.root_node.named_children
         if tree.root_node.has_error or not statement:
             raise UnsupportedTypeError(f"not an integer constant: {text!r}")
@@ -578,6 +614,7 @@ class _Parser:
                 # tree; the raw text still carries the `*` or the `[4]`.
                 name = _declared_name(declarator)
                 if name is not None:
+                    self._claim(name, ("unsupported",), node)
                     self.unsupported[name] = _TYPEDEF_REASONS.get(
                         declarator.type,
                         f"packgen cannot pack a typedef of this shape "
@@ -592,6 +629,7 @@ class _Parser:
             body = _child(type_node, "body")
             if body is None:
                 for name in names:
+                    self._claim(name, ("forward",), node)
                     self.unsupported[name] = (
                         "the struct has no body in this file; packgen does not "
                         "follow #include"
@@ -607,6 +645,7 @@ class _Parser:
                 self._collect_enumerators(type_node)
             kind = type_node.type.removesuffix("_specifier")
             for name in names:
+                self._claim(name, ("unsupported",), node)
                 self.unsupported[name] = (
                     f"{kind}s have no portable packed representation"
                 )
@@ -616,8 +655,10 @@ class _Parser:
         target = self._type_name(type_node, allow_unsupported=True)
         for name in names:
             if target is None:
+                self._claim(name, ("unsupported",), node)
                 self.unsupported[name] = "the aliased type is not a fixed-width type"
             else:
+                self._claim(name, ("alias", target), node)
                 self.aliases[name] = target
 
     # -- struct bodies --------------------------------------------------
