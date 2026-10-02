@@ -112,6 +112,19 @@ class TestErrorHandling:
         assert "if (t == NULL) return NULL;" in source
 
 
+class TestNameCollisions:
+    def test_a_pack_routine_named_like_a_json_one_is_refused(self):
+        # The pack routine for json_s_t and the JSON one for s_t would both
+        # be marshal_json_s_t.
+        with pytest.raises(UnsupportedTypeError, match="marshal_json_s_t"):
+            generate(
+                """
+                typedef struct { uint8_t a; } s_t;
+                typedef struct { uint8_t b; } json_s_t;
+                """
+            )
+
+
 class TestRejections:
     def test_char_pointer_is_allowed(self):
         source = generate("typedef struct { char *a; } s_t;").source

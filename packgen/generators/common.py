@@ -49,6 +49,29 @@ def check_no_macro_collisions(schema: Schema, names: Iterable[str]) -> None:
     )
 
 
+def check_no_name_collisions(schema: Schema, names: Iterable[tuple[str, str]]) -> None:
+    """Refuse to emit two things under one name.
+
+    ``names`` pairs each file-scope name packgen will emit with a
+    description of what it is for.  Generated names are built from struct
+    names, so structs ``foo`` and ``foo_core`` both lay claim to
+    ``unmarshal_foo_core`` -- one for its static core, the other for its
+    entry point -- and a struct named ``marshal_foo`` collides with foo's
+    marshaller.  Either way the generated code would not compile, and
+    packgen can say why before it gets that far.
+    """
+    owners: dict[str, str] = {}
+    for typedef in (*(s.name for s in schema), *schema.aliases, *schema.unsupported):
+        owners[typedef] = f"the header's typedef {typedef!r}"
+    for name, purpose in names:
+        owner = owners.setdefault(name, purpose)
+        if owner != purpose:
+            raise UnsupportedTypeError(
+                f"packgen needs {name!r} for {purpose}, but it is already "
+                f"{owner}; rename a struct to avoid the collision"
+            )
+
+
 def check_packable(schema: Schema, field: Field, struct_name: str) -> str:
     """Validate a field and return its resolved type name."""
     if field.is_pointer:

@@ -31,6 +31,7 @@ from packgen.generators.common import (
     GeneratedPair,
     array_loops,
     check_no_macro_collisions,
+    check_no_name_collisions,
     check_packable,
     pack_statements,
     unpack_expression,
@@ -77,6 +78,21 @@ def pack_core_signature(name: str) -> str:
     return f"static uint8_t *marshal_{name}_core(const {name} *t, uint8_t *p)"
 
 
+def generated_names(schema: Schema) -> list[tuple[str, str]]:
+    """Every file-scope name the pack routines emit, with what it is for."""
+    names = []
+    for struct in schema:
+        label = f"struct {struct.name!r}"
+        names += [
+            (lengths.length_name(struct.name), f"the packed length of {label}"),
+            (f"unmarshal_{struct.name}", f"the unmarshaller of {label}"),
+            (f"marshal_{struct.name}", f"the marshaller of {label}"),
+            (f"unmarshal_{struct.name}_core", f"the unmarshal core of {label}"),
+            (f"marshal_{struct.name}_core", f"the marshal core of {label}"),
+        ]
+    return names
+
+
 def generate(
     schema: Schema,
     *,
@@ -88,20 +104,9 @@ def generate(
     if endian not in {"little", "big"}:
         raise ValueError(f"endian must be 'little' or 'big', not {endian!r}")
 
-    check_no_macro_collisions(
-        schema,
-        (
-            name
-            for struct in schema
-            for name in (
-                lengths.length_name(struct.name),
-                f"unmarshal_{struct.name}",
-                f"marshal_{struct.name}",
-                f"unmarshal_{struct.name}_core",
-                f"marshal_{struct.name}_core",
-            )
-        ),
-    )
+    names = generated_names(schema)
+    check_no_name_collisions(schema, names)
+    check_no_macro_collisions(schema, (name for name, _ in names))
 
     # Resolving every field up front means a bad header fails before any
     # output is produced, rather than emitting half a file.

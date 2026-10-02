@@ -339,3 +339,52 @@ class TestMacroCollisions:
             parse_source(source), source_header="h.h", generated_header="h_unpack.h"
         )
         assert "#define len_s_t ((size_t)16)" in generated.header
+
+
+class TestNameCollisions:
+    """Generated names are built from struct names, so two structs can
+    lay claim to the same one.  The C compiler would reject the output;
+    packgen refuses it first and says which structs to rename.
+    """
+
+    def test_a_struct_named_after_anothers_core_is_refused(self):
+        # foo's static core and foo_core's entry point are both
+        # unmarshal_foo_core.
+        with pytest.raises(UnsupportedTypeError) as caught:
+            generate(
+                """
+                typedef struct { uint8_t a; } foo;
+                typedef struct { uint16_t b; } foo_core;
+                """
+            )
+        message = str(caught.value)
+        assert "'unmarshal_foo_core'" in message
+        assert "'foo'" in message
+        assert "'foo_core'" in message
+
+    def test_a_struct_named_after_anothers_marshaller_is_refused(self):
+        with pytest.raises(UnsupportedTypeError, match="typedef 'marshal_foo'"):
+            generate(
+                """
+                typedef struct { uint8_t a; } foo;
+                typedef struct { uint8_t b; } marshal_foo;
+                """
+            )
+
+    def test_an_alias_named_after_a_length_is_refused(self):
+        with pytest.raises(UnsupportedTypeError, match="len_foo"):
+            generate(
+                """
+                typedef uint8_t len_foo;
+                typedef struct { len_foo a; } foo;
+                """
+            )
+
+    def test_similar_names_that_do_not_collide_are_fine(self):
+        generated = generate(
+            """
+            typedef struct { uint8_t a; } foo;
+            typedef struct { uint8_t b; } foo_cored;
+            """
+        )
+        assert "unmarshal_foo_cored_core" in generated.source
