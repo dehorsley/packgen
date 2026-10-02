@@ -719,6 +719,88 @@ def test_json_nested_arrays(generate, build, jansson):
     assert result.returncode == 0, result.stderr
 
 
+JSON_UNREPRESENTABLE_MAIN = r"""
+#include <assert.h>
+#include <math.h>
+#include <string.h>
+#include "packet_json.h"
+
+static const char *text(json_t *root, const char *key)
+{
+    json_t *v = json_object_get(root, key);
+    assert(json_is_string(v));
+    return json_string_value(v);
+}
+
+int main(void)
+{
+    s_t t;
+    json_t *root;
+
+    memset(&t, 0, sizeof t);
+    t.nan = NAN;
+    t.inf = INFINITY;
+    t.ninf = -INFINITY;
+    t.finite = 1.5;
+    memcpy(t.latin1, "\xb0" "C", 2);         /* Latin-1 degree sign */
+    memcpy(t.utf8, "\xc2\xb0" "C", 3);      /* the same, in UTF-8 */
+    memcpy(t.cut, "ab\xe2\x82", 4);         /* a sequence cut short */
+    memcpy(t.overlong, "\xc0\xaf", 2);      /* overlong '/' */
+    memcpy(t.surrogate, "\xed\xa0\x80", 3); /* U+D800 */
+
+    root = marshal_json_s_t(&t);
+    assert(root != NULL);
+
+    assert(strcmp(text(root, "nan"), "NaN") == 0);
+    assert(strcmp(text(root, "inf"), "Infinity") == 0);
+    assert(strcmp(text(root, "ninf"), "-Infinity") == 0);
+    assert(json_real_value(json_object_get(root, "finite")) == 1.5);
+
+    assert(strcmp(text(root, "latin1"), "\xef\xbf\xbd" "C") == 0);
+    assert(strcmp(text(root, "utf8"), "\xc2\xb0" "C") == 0);
+    assert(strcmp(text(root, "cut"), "ab\xef\xbf\xbd\xef\xbf\xbd") == 0);
+    assert(strcmp(text(root, "overlong"), "\xef\xbf\xbd\xef\xbf\xbd") == 0);
+    assert(strcmp(text(root, "surrogate"),
+                  "\xef\xbf\xbd\xef\xbf\xbd\xef\xbf\xbd") == 0);
+
+    json_decref(root);
+    return 0;
+}
+"""
+
+
+def test_json_renders_what_jansson_would_refuse(generate, build, jansson):
+    # jansson returns NULL for NaN, infinity and invalid UTF-8, which the
+    # generated code would take for an allocation failure and drop the
+    # whole struct.  A NaN sentinel or one stray byte off the wire must not
+    # make the JSON disappear.
+    cflags, ldflags = jansson
+    project = generate(
+        """
+        typedef struct {
+            float nan;
+            double inf;
+            double ninf;
+            double finite;
+            char latin1[4];
+            char utf8[4];
+            char cut[4];
+            char overlong[4];
+            char surrogate[4];
+        } s_t;
+        """,
+        with_json=True,
+    )
+    binary = build(
+        project,
+        JSON_UNREPRESENTABLE_MAIN,
+        extra_cflags=tuple(cflags),
+        extra_ldflags=tuple(ldflags),
+    )
+    result = subprocess.run([str(binary)], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+
+
 def test_real_world_json_compiles(generate, build, jansson):
     cflags, ldflags = jansson
     project = generate(

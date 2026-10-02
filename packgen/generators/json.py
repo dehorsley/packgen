@@ -6,6 +6,11 @@ For every struct ``X`` this emits ``json_t *marshal_json_X(const X *t)``,
 returning a new reference or ``NULL`` on allocation failure.  jansson's
 ``*_new`` functions steal the reference they are handed and release it even
 when they fail, so the error paths only ever have to drop ``root``.
+
+That contract only holds if allocation failure is the *only* way a value
+constructor can return ``NULL``.  jansson also refuses NaN and infinity and
+strings that are not UTF-8, so those go through helpers that render them
+some other way rather than failing the whole struct.
 """
 
 from __future__ import annotations
@@ -38,6 +43,79 @@ static json_t *packgen_json_uint64(uint64_t value)
     return json_string(text);
 }"""
 
+#: JSON has no NaN or infinity, and json_real() returns NULL for them, which
+#: would read as an allocation failure.  They go out as the strings proto3's
+#: JSON mapping uses, so a sentinel NaN still survives the trip.
+REAL_HELPER = """\
+static json_t *packgen_json_real(double value)
+{
+    if (isnan(value)) return json_string("NaN");
+    if (isinf(value)) return json_string(value > 0 ? "Infinity" : "-Infinity");
+    return json_real(value);
+}"""
+
+#: jansson refuses a string that is not valid UTF-8, and a char array
+#: unmarshalled off the wire can hold anything.  Each byte that does not
+#: begin a valid sequence becomes U+FFFD instead.  The checks are the ones
+#: jansson makes -- no overlong forms, surrogates or code points past
+#: U+10FFFF -- so whatever passes here, json_stringn() accepts.
+STRING_HELPER = """\
+static size_t packgen_utf8_length(const unsigned char *s, size_t n)
+{
+    size_t length;
+    size_t i;
+    uint32_t code;
+
+    if (s[0] < 0x80) return 1;
+    if (s[0] >= 0xC2 && s[0] <= 0xDF) { length = 2; code = s[0] & 0x1Fu; }
+    else if (s[0] >= 0xE0 && s[0] <= 0xEF) { length = 3; code = s[0] & 0x0Fu; }
+    else if (s[0] >= 0xF0 && s[0] <= 0xF4) { length = 4; code = s[0] & 0x07u; }
+    else return 0;
+    if (length > n) return 0;
+    for (i = 1; i < length; i++) {
+        if ((s[i] & 0xC0u) != 0x80u) return 0;
+        code = (code << 6) | (s[i] & 0x3Fu);
+    }
+    if (length == 3 && code < 0x800u) return 0;
+    if (length == 4 && code < 0x10000u) return 0;
+    if (code >= 0xD800u && code <= 0xDFFFu) return 0;
+    if (code > 0x10FFFFu) return 0;
+    return length;
+}
+
+static json_t *packgen_json_string(const char *s, size_t n)
+{
+    const unsigned char *u = (const unsigned char *)s;
+    size_t i = 0;
+    size_t out = 0;
+    size_t length;
+    char *copy;
+    json_t *v;
+
+    while (i < n && (length = packgen_utf8_length(u + i, n - i)) != 0) i += length;
+    if (i == n) return json_stringn(s, n);
+
+    /* At worst every byte is replaced by three. */
+    if (n > SIZE_MAX / 3) return NULL;
+    copy = malloc(n * 3);
+    if (copy == NULL) return NULL;
+    for (i = 0; i < n; i += length) {
+        length = packgen_utf8_length(u + i, n - i);
+        if (length == 0) {
+            copy[out++] = (char)0xEF;
+            copy[out++] = (char)0xBF;
+            copy[out++] = (char)0xBD;
+            length = 1;
+        } else {
+            memcpy(copy + out, s + i, length);
+            out += length;
+        }
+    }
+    v = json_stringn(copy, out);
+    free(copy);
+    return v;
+}"""
+
 #: `strnlen` is POSIX, not ISO C: glibc hides it under -std=c11, where
 #: __STRICT_ANSI__ suppresses _DEFAULT_SOURCE.  Spelling the scan out keeps
 #: the generated code free of feature-test macros.
@@ -59,7 +137,13 @@ def generate(
     schema: Schema, *, source_header: str, generated_header: str
 ) -> GeneratedPair:
     """Generate the JSON marshalling header and source for ``schema``."""
-    helpers = ["packgen_json_uint64", "packgen_strnlen"]
+    helpers = [
+        "packgen_json_uint64",
+        "packgen_json_real",
+        "packgen_json_string",
+        "packgen_utf8_length",
+        "packgen_strnlen",
+    ]
     marshallers = [
         (
             f"marshal_json_{struct.name}",
@@ -137,22 +221,38 @@ def _source(
     source_header: str,
     generated_header: str,
 ) -> str:
-    needs_uint64 = any("uint64_t" in types for types in resolved.values())
+    used = {type_ for types in resolved.values() for type_ in types}
+    needs_uint64 = "uint64_t" in used
+    needs_real = bool(used & REAL_TYPES.keys())
     needs_strnlen = any(
         _is_string(field, type_)
         for struct in schema
         for field, type_ in zip(struct.fields, resolved[struct.name], strict=True)
     )
+    needs_string = needs_strnlen or "char *" in used
+
+    includes = []
+    if needs_uint64:
+        includes += ["#include <inttypes.h>", "#include <stdio.h>"]
+    if needs_real:
+        includes.append("#include <math.h>")
+    includes.append("#include <stddef.h>")
+    if needs_string:
+        includes += ["#include <stdlib.h>", "#include <string.h>"]
 
     writer = Writer()
     writer.line(banner(source_header=source_header))
-    if needs_uint64:
-        writer.lines("#include <inttypes.h>", "#include <stdio.h>")
-    writer.lines("#include <stddef.h>", "", f'#include "{generated_header}"', "")
+    writer.lines(*includes, "", f'#include "{generated_header}"', "")
 
     if needs_uint64:
         writer.line()
         writer.line(UINT64_HELPER)
+    if needs_real:
+        writer.line()
+        writer.line(REAL_HELPER)
+    if needs_string:
+        writer.line()
+        writer.line(STRING_HELPER)
     if needs_strnlen:
         writer.line()
         writer.line(STRNLEN_HELPER)
@@ -181,7 +281,9 @@ def _array_levels(field: Field, type_: str) -> int:
 def _emit_string(writer: Writer, accessor: str, size: int) -> None:
     # A fixed-size char field is conventionally NUL padded, so stop at the
     # first NUL rather than emitting the padding into the JSON string.
-    writer.line(f"v = json_stringn({accessor}, packgen_strnlen({accessor}, {size}));")
+    writer.line(
+        f"v = packgen_json_string({accessor}, packgen_strnlen({accessor}, {size}));"
+    )
 
 
 def _function(writer: Writer, struct: Struct, types: list[str]) -> None:
@@ -259,11 +361,14 @@ def _set_member(writer: Writer, name: str) -> None:
 
 def _value(writer: Writer, accessor: str, type_: str) -> None:
     if type_ == "char *":
-        writer.line(f"v = {accessor} != NULL ? json_string({accessor}) : json_null();")
+        writer.line(
+            f"v = {accessor} != NULL ? "
+            f"packgen_json_string({accessor}, strlen({accessor})) : json_null();"
+        )
     elif type_ in BOOL_TYPES:
         writer.line(f"v = json_boolean({accessor});")
     elif type_ in REAL_TYPES:
-        writer.line(f"v = json_real((double){accessor});")
+        writer.line(f"v = packgen_json_real((double){accessor});")
     elif type_ == "uint64_t":
         writer.line(f"v = packgen_json_uint64({accessor});")
     elif type_ in INT_TYPES:

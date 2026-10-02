@@ -36,8 +36,8 @@ class TestValues:
             ("uint8_t", "v = json_integer((json_int_t)t->a);"),
             ("int32_t", "v = json_integer((json_int_t)t->a);"),
             ("bool", "v = json_boolean(t->a);"),
-            ("float", "v = json_real((double)t->a);"),
-            ("double", "v = json_real((double)t->a);"),
+            ("float", "v = packgen_json_real((double)t->a);"),
+            ("double", "v = packgen_json_real((double)t->a);"),
         ],
     )
     def test_scalar_rendering(self, type_, expected):
@@ -55,7 +55,7 @@ class TestValues:
 
     def test_char_array_is_a_string_trimmed_at_the_first_nul(self):
         source = generate("typedef struct { char a[8]; } s_t;").source
-        assert "json_stringn(t->a, packgen_strnlen(t->a, 8))" in source
+        assert "packgen_json_string(t->a, packgen_strnlen(t->a, 8))" in source
 
     def test_the_length_scan_is_spelled_out_rather_than_using_posix_strnlen(self):
         # glibc hides strnlen under -std=c11, so the generated code carries
@@ -67,6 +67,16 @@ class TestValues:
     def test_the_length_scan_is_only_emitted_when_needed(self):
         source = generate("typedef struct { uint32_t a; } s_t;").source
         assert "packgen_strnlen" not in source
+
+    def test_the_real_helper_is_only_emitted_when_needed(self):
+        source = generate("typedef struct { uint32_t a; } s_t;").source
+        assert "packgen_json_real" not in source
+        assert "<math.h>" not in source
+
+    def test_the_string_helper_is_only_emitted_when_needed(self):
+        source = generate("typedef struct { uint8_t a[4]; } s_t;").source
+        assert "packgen_json_string" not in source
+        assert "<stdlib.h>" not in source
 
     def test_nested_struct_delegates(self):
         source = generate(
@@ -124,11 +134,23 @@ class TestNameCollisions:
                 """
             )
 
+    def test_a_helper_name_taken_by_a_macro_is_refused(self):
+        with pytest.raises(UnsupportedTypeError, match="packgen_json_real"):
+            generate(
+                """
+                #define packgen_json_real(x) x
+                typedef struct { float a; } s_t;
+                """
+            )
+
 
 class TestRejections:
     def test_char_pointer_is_allowed(self):
         source = generate("typedef struct { char *a; } s_t;").source
-        assert "v = t->a != NULL ? json_string(t->a) : json_null();" in source
+        assert (
+            "v = t->a != NULL ? packgen_json_string(t->a, strlen(t->a)) : json_null();"
+            in source
+        )
 
     def test_other_pointers_are_rejected(self):
         with pytest.raises(UnsupportedTypeError, match="pointer"):
@@ -139,5 +161,5 @@ class TestRejections:
         # char a[2][8] is two strings, not two arrays of numbers.
         source = generate("typedef struct { char a[2][8]; } s_t;").source
         assert "for (size_t i0 = 0; i0 < 2; i0++)" in source
-        assert "json_stringn(t->a[i0], packgen_strnlen(t->a[i0], 8))" in source
+        assert "packgen_json_string(t->a[i0], packgen_strnlen(t->a[i0], 8))" in source
         assert "json_t *a1;" not in source
