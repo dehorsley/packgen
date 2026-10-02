@@ -1,0 +1,64 @@
+name: Release
+
+# Publishes to PyPI when a GitHub release is published.  Create the release
+# from a tag such as v0.1.0; the version is taken from that tag.
+on:
+  release:
+    types: [published]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # setuptools-scm derives the version from tags, so it needs history.
+          fetch-depth: 0
+
+      - uses: astral-sh/setup-uv@v5
+
+      - name: Build sdist and wheel
+        run: uv build
+
+      - name: The built version must be the tag, exactly
+        # A tag that is not on the checked-out commit, or a dirty tree, makes
+        # setuptools-scm produce a .devN version; refuse to publish that.
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          wheel=$(ls dist/*.whl)
+          built=$(basename "$wheel" | cut -d- -f2)
+          echo "tag: $tag, built: $built"
+          test "$tag" = "$built"
+
+      - name: Smoke test the wheel in a clean environment
+        run: |
+          uv venv "$RUNNER_TEMP/smoke"
+          uv pip install --python "$RUNNER_TEMP/smoke" dist/*.whl
+          printf '#include <stdint.h>\ntypedef struct { uint16_t a; } s_t;\n' > "$RUNNER_TEMP/s.h"
+          "$RUNNER_TEMP/smoke/bin/packgen" --no-json "$RUNNER_TEMP/s.h"
+          test -f "$RUNNER_TEMP/s_unpack.c"
+          "$RUNNER_TEMP/smoke/bin/packgen" --version
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    # Approval rules, if any, are configured on this environment in the
+    # repository settings; it is also what PyPI's trusted publisher matches.
+    environment:
+      name: pypi
+      url: https://pypi.org/p/packgen
+    permissions:
+      id-token: write # trusted publishing; no API token is stored anywhere
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - uses: pypa/gh-action-pypi-publish@release/v1
